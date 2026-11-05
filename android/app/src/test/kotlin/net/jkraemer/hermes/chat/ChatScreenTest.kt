@@ -242,4 +242,34 @@ class ChatScreenTest {
         peer.state.value = ConnectionState.Ready
         compose.waitUntil(10_000) { peer.calls.any { it.first == "session.events.since" } }
     }
+
+    @Test
+    fun sendStaysDisabledUntilTheChatIsOpen() {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        peer.openGate = gate
+        show()
+        compose.onNodeWithTag("composer").performTextInput("hello")
+        compose.waitUntil(10_000) { peer.calls.any { it.first == "session.resume" } }
+
+        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
+
+        gate.complete(Unit)
+        compose.waitUntil(10_000) { peer.calls.any { it.first == "session.events.since" } }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Send").assertIsEnabled()
+    }
+
+    @Test
+    fun aFailedOpenOffersRetryWhileConnected() {
+        peer.failing = setOf("session.resume")
+        show()
+        waitForText("Couldn't open this chat")
+        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
+
+        peer.failing = emptySet()
+        compose.onNodeWithText("Retry").performClick()
+
+        compose.waitUntil(10_000) { peer.calls.any { it.first == "session.events.since" } }
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Couldn't open this chat").fetchSemanticsNodes().isEmpty() }
+    }
 }

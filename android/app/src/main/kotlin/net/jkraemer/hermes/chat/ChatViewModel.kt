@@ -36,7 +36,7 @@ const val NEW_CHAT_TITLE = "New chat"
  */
 class ChatViewModel(
     private val peer: RpcPeer,
-    storedSessionId: String?,
+    private val storedSessionId: String?,
     initialTitle: String?,
     private val needsAnswer: MutableStateFlow<Set<String>>,
     private val seenStore: SeenStore,
@@ -59,11 +59,17 @@ class ChatViewModel(
     private val _message = MutableStateFlow<String?>(null)
     val message: StateFlow<String?> = _message.asStateFlow()
 
+    /** True while the last attempt to open or create the session failed and none is running. */
+    private val _openFailed = MutableStateFlow(false)
+    val openFailed: StateFlow<Boolean> = _openFailed.asStateFlow()
+
+    private var opened = false
+
     /** The stored id this chat has needsAnswer registered under. */
     private var registeredId: String? = null
 
     init {
-        scope.launch { openWhenReady(storedSessionId) }
+        scope.launch { openWhenReady() }
         scope.launch { chat.collect(::onChatChanged) }
         scope.launch { markSeenWhileVisible() }
         scope.launch { peer.events.collect { event -> if (event.type in TITLE_EVENTS) onTitleEvent(event.type, event.payload) } }
@@ -83,15 +89,23 @@ class ChatViewModel(
         }
     }
 
-    private suspend fun openWhenReady(storedSessionId: String?) {
-        var opened = false
+    private suspend fun openWhenReady() {
         peer.state.collectLatest { connection ->
-            if (connection != ConnectionState.Ready || opened) return@collectLatest
-            guarded("Couldn't open the chat") {
-                if (storedSessionId != null) controller.open(storedSessionId) else controller.startNew()
-                opened = true
-            }
+            if (connection == ConnectionState.Ready && !opened) openChat()
         }
+    }
+
+    private suspend fun openChat() {
+        _openFailed.value = false
+        guarded("Couldn't open the chat") {
+            if (storedSessionId != null) controller.open(storedSessionId) else controller.startNew()
+            opened = true
+        }
+        _openFailed.value = !opened
+    }
+
+    fun retryOpen() {
+        scope.launch { openChat() }
     }
 
     private fun onChatChanged(state: ChatState) {

@@ -74,6 +74,7 @@ fun ChatScreen(
     val connection by viewModel.connection.collectAsStateWithLifecycle()
     val title by viewModel.title.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
+    val openFailed by viewModel.openFailed.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val ready = connection == ConnectionState.Ready
 
@@ -101,7 +102,7 @@ fun ChatScreen(
         bottomBar = {
             Composer(
                 running = chat.running,
-                canSend = ready,
+                canSend = ready && chat.liveSessionId != null,
                 onSend = viewModel::send,
                 onStop = viewModel::interrupt,
             )
@@ -109,6 +110,7 @@ fun ChatScreen(
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
             if (!ready) ReconnectingBanner(onRetryConnect)
+            else if (openFailed && chat.liveSessionId == null) OpenFailedBanner(viewModel::retryOpen)
             Messages(chat.items, viewModel, clock, Modifier.weight(1f))
         }
     }
@@ -119,6 +121,16 @@ private fun ReconnectingBanner(onRetry: () -> Unit) {
     Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.secondaryContainer) {
         Row(Modifier.padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Reconnecting…", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
+            TextButton(onRetry) { Text("Retry") }
+        }
+    }
+}
+
+@Composable
+private fun OpenFailedBanner(onRetry: () -> Unit) {
+    Surface(Modifier.fillMaxWidth(), color = MaterialTheme.colorScheme.errorContainer) {
+        Row(Modifier.padding(start = 16.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Couldn't open this chat", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
             TextButton(onRetry) { Text("Retry") }
         }
     }
