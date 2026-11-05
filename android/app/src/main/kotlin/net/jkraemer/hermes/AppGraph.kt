@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import net.jkraemer.hermes.core.auth.FileCookieStore
 import net.jkraemer.hermes.core.auth.HermesAuth
@@ -13,6 +14,7 @@ import net.jkraemer.hermes.core.auth.NotLoggedInException
 import net.jkraemer.hermes.core.auth.PersistentCookieJar
 import net.jkraemer.hermes.core.rpc.RpcConnection
 import net.jkraemer.hermes.core.sessions.SessionsApi
+import net.jkraemer.hermes.settings.SeenStore
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -39,6 +41,11 @@ class AppGraph(context: Context) {
     private val client = OkHttpClient.Builder().cookieJar(cookieJar).build()
 
     private var services: Services? = null
+
+    val seenStore = SeenStore(prefs)
+
+    /** Stored ids of the sessions waiting for the user's answer; the chat screen keeps it current. */
+    val needsAnswer = MutableStateFlow(emptySet<String>())
 
     /**
      * The Hermes server. Assigning it, even to the same value, persists it and rebuilds [auth],

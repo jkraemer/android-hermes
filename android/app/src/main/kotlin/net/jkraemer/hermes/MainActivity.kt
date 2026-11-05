@@ -20,6 +20,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.login.LoginScreen
 import net.jkraemer.hermes.login.LoginViewModel
+import net.jkraemer.hermes.sessions.SessionListScreen
+import net.jkraemer.hermes.sessions.SessionListViewModel
+import net.jkraemer.hermes.sessions.SessionsApiSource
 import okhttp3.HttpUrl.Companion.toHttpUrl
 
 class MainActivity : ComponentActivity() {
@@ -95,7 +98,18 @@ private fun HermesRoot(graph: AppGraph) {
                 graph.reconnect()
             })
         }
-        Screen.Sessions -> Box(Modifier.testTag("sessions-screen"))
+        Screen.Sessions -> {
+            val sessionList = viewModel {
+                SessionListViewModel(SessionsApiSource { graph.sessions }, graph.needsAnswer, graph.seenStore)
+            }
+            SessionListScreen(
+                sessionList,
+                host = graph.serverUrl?.host.orEmpty(),
+                onOpenChat = { screen = Screen.Chat(it) },
+                onNotLoggedIn = { screen = Screen.Login },
+                onRetryConnect = graph::reconnect,
+            )
+        }
         is Screen.Chat -> Box(Modifier.testTag("chat-screen"))
     }
 }
