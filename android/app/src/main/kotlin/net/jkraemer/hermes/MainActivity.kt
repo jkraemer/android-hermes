@@ -4,7 +4,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
+import net.jkraemer.hermes.chat.ChatScreen
+import net.jkraemer.hermes.chat.ChatViewModel
+import java.util.UUID
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -14,8 +18,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.testTag
 import androidx.lifecycle.viewmodel.compose.viewModel
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.login.LoginScreen
@@ -69,6 +71,7 @@ private val ScreenSaver = Saver<Screen?, String>(
 
 @Composable
 private fun HermesRoot(graph: AppGraph) {
+    val activity = LocalContext.current as ComponentActivity
     var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen?>(null) }
 
     LaunchedEffect(Unit) {
@@ -105,11 +108,28 @@ private fun HermesRoot(graph: AppGraph) {
             SessionListScreen(
                 sessionList,
                 host = graph.serverUrl?.host.orEmpty(),
-                onOpenChat = { screen = Screen.Chat(it) },
+                onOpenChat = { id, title -> screen = Screen.Chat(id, title) },
                 onNotLoggedIn = { screen = Screen.Login },
                 onRetryConnect = graph::reconnect,
             )
         }
-        is Screen.Chat -> Box(Modifier.testTag("chat-screen"))
+        is Screen.Chat -> {
+            val current = screen as Screen.Chat
+            // A fresh key per opening: a chat reopened later must get a new controller. It is saved
+            // so a rotation keeps the chat, and it does not change when a new chat learns its id.
+            val chatKey = rememberSaveable { UUID.randomUUID().toString() }
+            val chat = viewModel(key = chatKey) {
+                ChatViewModel(graph.rpc, current.storedSessionId, current.title, graph.needsAnswer, graph.seenStore)
+            }
+            DisposableEffect(chat) {
+                onDispose { if (!activity.isChangingConfigurations) chat.close() }
+            }
+            ChatScreen(
+                chat,
+                onBack = { screen = Screen.Sessions },
+                onRetryConnect = graph::reconnect,
+                onStoredSessionId = { id -> if (current.storedSessionId == null) screen = Screen.Chat(id, current.title) },
+            )
+        }
     }
 }

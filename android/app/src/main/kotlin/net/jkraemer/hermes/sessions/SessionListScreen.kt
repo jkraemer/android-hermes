@@ -60,13 +60,13 @@ private val Bucket.title: String
         Bucket.OLDER -> "Older"
     }
 
-/** [onOpenChat] gets the stored session id, or null for a new chat. */
+/** [onOpenChat] gets the stored session id and its title, or nulls for a new chat. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionListScreen(
     viewModel: SessionListViewModel,
     host: String,
-    onOpenChat: (String?) -> Unit,
+    onOpenChat: (id: String?, title: String?) -> Unit,
     onNotLoggedIn: () -> Unit,
     onRetryConnect: () -> Unit,
 ) {
@@ -91,7 +91,7 @@ fun SessionListScreen(
         modifier = Modifier.testTag("sessions-screen"),
         topBar = { TopAppBar(title = { Text("Hermes") }) },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { onOpenChat(null) }) { Text("New chat") }
+            ExtendedFloatingActionButton(onClick = { onOpenChat(null, null) }) { Text("New chat") }
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
@@ -121,7 +121,7 @@ fun SessionListScreen(
                             is TimelineItem.Header -> BucketHeader(item.bucket)
                             is TimelineItem.Row -> SessionRow(
                                 item,
-                                onOpen = { onOpenChat(item.session.id) },
+                                onOpen = { onOpenChat(item.session.id, item.session.title) },
                                 onRename = { viewModel.rename(item.session.id, it) },
                                 onSetPinned = { viewModel.setPinned(item.session.id, it) },
                                 onArchive = { viewModel.archive(item.session.id) },

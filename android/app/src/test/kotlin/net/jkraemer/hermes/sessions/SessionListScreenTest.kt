@@ -84,7 +84,7 @@ class SessionListScreenTest {
 
     private val source = FakeSource()
     private val needsAnswer = MutableStateFlow(emptySet<String>())
-    private val opened = mutableListOf<String?>()
+    private val opened = mutableListOf<Pair<String?, String?>>()
     private var loggedOut = 0
     private var reconnects = 0
 
@@ -104,7 +104,7 @@ class SessionListScreenTest {
             MaterialTheme {
                 SessionListScreen(
                     viewModel, host = "hermes.example.ts.net",
-                    onOpenChat = { opened += it },
+                    onOpenChat = { id, title -> opened += id to title },
                     onNotLoggedIn = { loggedOut++ },
                     onRetryConnect = { reconnects++ },
                 )
@@ -270,14 +270,14 @@ class SessionListScreenTest {
         show(session("a", title = "Morning briefing"))
         waitForText("Morning briefing")
         compose.onNodeWithText("Morning briefing").performClick()
-        assertEquals(listOf<String?>("a"), opened)
+        assertEquals(listOf<Pair<String?, String?>>("a" to "Morning briefing"), opened)
     }
 
     @Test
     fun newChatOpensChat() {
         show(session("a"))
         compose.onNodeWithText("New chat").performClick()
-        assertEquals(listOf<String?>(null), opened)
+        assertEquals(listOf<Pair<String?, String?>>(null to null), opened)
     }
 
     @Test

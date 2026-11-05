@@ -24,8 +24,8 @@ sealed interface Screen {
     data object Login : Screen
     data object Sessions : Screen
 
-    /** [storedSessionId] null starts a new chat. */
-    data class Chat(val storedSessionId: String?) : Screen
+    /** [storedSessionId] null starts a new chat; [title] is the one the session list showed. */
+    data class Chat(val storedSessionId: String?, val title: String? = null) : Screen
 }
 
 /**
