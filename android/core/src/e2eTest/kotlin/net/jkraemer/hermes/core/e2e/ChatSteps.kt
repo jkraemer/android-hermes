@@ -36,3 +36,7 @@ suspend fun ChatController.sendAndAwaitReply(prompt: String, expected: String): 
 
 fun failMisstep(chat: ChatController): Nothing =
     throw AssertionError("agent did not follow the prompt (model misstep, not an app bug): ${chat.state.value.lastAgentOutput()}")
+
+/** For waits after a card was answered: the agent had done what the prompt asked, so a hang is ours to explain. */
+fun failTurnNotEnded(chat: ChatController): Nothing =
+    throw AssertionError("turn did not end after answering (protocol problem?): ${chat.state.value.lastAgentOutput()}")

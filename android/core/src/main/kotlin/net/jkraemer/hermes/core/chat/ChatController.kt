@@ -4,11 +4,11 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -47,10 +47,13 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
-    // Live events that arrive while a resync is replaying are held back so the replay, which
-    // holds older sequence numbers, is not dropped as stale.
-    private val bufferLock = Any()
+    // Every state change happens under [lock]. While a resync is replaying, live events are held
+    // back so the replay, which holds older sequence numbers, is not dropped as stale.
+    private val lock = Any()
     private var heldEvents: MutableList<RpcFrame.Event>? = null
+
+    /** The server process' replay numbering; a different value means the server restarted. */
+    private var epoch: String? = null
 
     private val collectors: List<Job>
     private var resync: Job? = null
@@ -60,7 +63,9 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
             scope.launch(start = CoroutineStart.UNDISPATCHED) { peer.events.collect(::onEvent) },
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 peer.serverRequests.collect { request ->
-                    if (_state.value.liveSessionId != null) feed(ChatInput.Request(request, clock()))
+                    synchronized(lock) {
+                        if (_state.value.liveSessionId != null) feed(ChatInput.Request(request, clock()))
+                    }
                 }
             },
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -71,7 +76,12 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
                         resync?.cancel()
                     } else if (connection == ConnectionState.Ready && dropped) {
                         dropped = false
-                        resync = scope.launch { resyncAfterDrop() }
+                        // A cancelled resync must have released the hold before the next one takes it.
+                        val previous = resync
+                        resync = scope.launch {
+                            previous?.cancelAndJoin()
+                            resyncAfterDrop()
+                        }
                     }
                 }
             },
@@ -89,10 +99,16 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
     suspend fun send(text: String) {
         val live = requireLiveSession()
         feed(ChatInput.UserSent(text))
-        peer.call("prompt.submit", buildJsonObject {
-            put("session_id", live)
-            put("text", text)
-        })
+        try {
+            peer.call("prompt.submit", buildJsonObject {
+                put("session_id", live)
+                put("text", text)
+            })
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            feed(ChatInput.Event(RpcFrame.Event("error", live, null, buildJsonObject { put("message", e.message ?: "Sending failed") })))
+            throw e
+        }
     }
 
     suspend fun answerApproval(requestId: String, choice: ApprovalChoice) {
@@ -134,28 +150,45 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
         checkNotNull(_state.value.liveSessionId) { "No chat session is open" }
 
     private fun feed(input: ChatInput) {
-        _state.update { reduce(it, input) }
+        synchronized(lock) { _state.value = reduce(_state.value, input) }
     }
 
     private fun onEvent(event: RpcFrame.Event) {
-        synchronized(bufferLock) {
+        synchronized(lock) {
             heldEvents?.let { it += event; return }
+            if (_state.value.liveSessionId != null) feed(ChatInput.Event(event))
         }
-        if (_state.value.liveSessionId != null) feed(ChatInput.Event(event))
     }
 
-    /** Replaces the chat with the session in a `session.resume` / `session.create` result. */
-    private fun adopt(result: JsonObject, requestedStoredId: String?) {
+    /**
+     * Replaces the chat with the session in a `session.resume` / `session.create` result and
+     * anchors the replay position to the server's current one: a resumed live session keeps its
+     * event ring, whose old events the transcript already contains.
+     */
+    private suspend fun adopt(result: JsonObject, requestedStoredId: String?) {
         val messages = (result["messages"] as? JsonArray).orEmpty().filterIsInstance<JsonObject>()
         val running = (result["running"] as? JsonPrimitive)?.booleanOrNull ?: false
-        _state.value = reduce(
-            ChatState(
-                liveSessionId = result.string("session_id"),
-                storedSessionId = result.string("stored_session_id") ?: requestedStoredId,
-            ),
-            ChatInput.Transcript(messages, running),
-        )
+        val live = result.string("session_id")
+        synchronized(lock) {
+            _state.value = reduce(
+                ChatState(liveSessionId = live, storedSessionId = result.string("stored_session_id") ?: requestedStoredId),
+                ChatInput.Transcript(messages, running),
+            )
+            epoch = null
+        }
         feedOpenRequests(result)
+        if (live == null) return
+        val position = peer.call("session.events.since", sinceParams(live, Long.MAX_VALUE)).jsonObject
+        synchronized(lock) {
+            epoch = position.string("epoch")
+            val latest = (position["latest_seq"] as? JsonPrimitive)?.longOrNull ?: 0
+            _state.value = _state.value.let { it.copy(lastSeq = maxOf(it.lastSeq, latest)) }
+        }
+    }
+
+    private fun sinceParams(live: String, lastSeen: Long) = buildJsonObject {
+        put("session_id", live)
+        put("last_seen", lastSeen)
     }
 
     // Only open_requests are replayed: they carry the srq id an answer must target.
@@ -174,34 +207,68 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
         }
     }
 
-    /** Fetches what was missed while the socket was down; falls back to a full resume when the server's replay window has passed. */
+    /**
+     * After a dropped socket Hermes has detached the session and will reap it after a short grace
+     * period; only `session.activate` reattaches it. Then the events missed meanwhile are replayed.
+     * Anything that shows the server lost track of the session (activate refused, replay window
+     * passed, server restarted) falls back to a full `session.resume`.
+     */
     private suspend fun resyncAfterDrop() {
-        val live = _state.value.liveSessionId ?: return
-        val stored = _state.value.storedSessionId
-        synchronized(bufferLock) { heldEvents = mutableListOf() }
+        val live: String
+        val stored: String?
+        synchronized(lock) {
+            live = _state.value.liveSessionId ?: return
+            stored = _state.value.storedSessionId
+            heldEvents = mutableListOf()
+        }
+        var complete = false
         try {
-            val result = try {
-                peer.call("session.events.since", buildJsonObject {
-                    put("session_id", live)
-                    put("last_seen", _state.value.lastSeq)
-                }).jsonObject
-            } catch (e: IOException) {
-                return // dropped again; the next return to Ready resyncs
-            } catch (e: RpcException) {
-                return
+            try {
+                complete = reattach(live, stored)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Dropped again or an unusable answer; the next return to Ready resyncs from the same position.
             }
-            if ((result["truncated"] as? JsonPrimitive)?.booleanOrNull == true && stored != null) {
-                synchronized(bufferLock) { heldEvents = null }
-                open(stored)
-                return
-            }
-            for (element in (result["events"] as? JsonArray).orEmpty()) {
-                (element as? JsonObject)?.let(::eventFrom)?.let { feed(ChatInput.Event(it)) }
-            }
-            feedOpenRequests(result)
         } finally {
-            val held = synchronized(bufferLock) { heldEvents.also { heldEvents = null } }
-            held?.forEach { feed(ChatInput.Event(it)) }
+            // An unfinished resync discards what it held: applying it would move lastSeq past the gap.
+            synchronized(lock) {
+                val held = heldEvents.also { heldEvents = null }
+                if (complete) held?.forEach { feed(ChatInput.Event(it)) }
+            }
+        }
+    }
+
+    /** Returns true when the state is current again. */
+    private suspend fun reattach(live: String, stored: String?): Boolean {
+        val activated = try {
+            peer.call("session.activate", buildJsonObject {
+                put("session_id", live)
+                put("omit_messages", true)
+            }).jsonObject
+        } catch (_: RpcException) {
+            return reopen(stored)
+        }
+        feedOpenRequests(activated)
+        val missed = peer.call("session.events.since", sinceParams(live, _state.value.lastSeq)).jsonObject
+        val restarted = missed.string("epoch") != epoch
+        val latest = (missed["latest_seq"] as? JsonPrimitive)?.longOrNull ?: 0
+        val truncated = (missed["truncated"] as? JsonPrimitive)?.booleanOrNull == true
+        if (restarted || truncated || latest < _state.value.lastSeq) return reopen(stored)
+        for (element in (missed["events"] as? JsonArray).orEmpty()) {
+            (element as? JsonObject)?.let(::eventFrom)?.let { feed(ChatInput.Event(it)) }
+        }
+        feedOpenRequests(missed)
+        return true
+    }
+
+    private suspend fun reopen(stored: String?): Boolean {
+        if (stored == null) return false
+        return try {
+            open(stored)
+            true
+        } catch (_: RpcException) {
+            false
         }
     }
 

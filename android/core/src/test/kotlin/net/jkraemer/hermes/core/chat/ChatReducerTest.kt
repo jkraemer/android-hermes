@@ -77,6 +77,16 @@ class ChatReducerTest {
         assertEquals(false, state.running)
     }
 
+    @Test fun errorEventAddsErrorItemAndEndsTheTurn() {
+        val state = run(
+            empty.copy(running = true),
+            event("message.start"),
+            event("error", """{"message":"provider down"}"""),
+        )
+        assertEquals(listOf(ChatItem.Assistant("", streaming = true), ChatItem.Error("provider down")), state.items)
+        assertEquals(false, state.running)
+    }
+
     @Test fun consecutiveToolsShareOneItem() {
         val state = run(
             empty,

@@ -1,6 +1,15 @@
 package net.jkraemer.hermes.core.chat
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,23 +22,35 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import net.jkraemer.hermes.core.rpc.ConnectionState
+import net.jkraemer.hermes.core.rpc.RpcError
+import net.jkraemer.hermes.core.rpc.RpcException
 import net.jkraemer.hermes.core.rpc.RpcFrame
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
+import java.io.IOException
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 
 private fun obj(json: String) = Json.parseToJsonElement(json) as JsonObject
 
 private class FakePeer : RpcPeer {
     override val state = MutableStateFlow<ConnectionState>(ConnectionState.Ready)
-    override val events = MutableSharedFlow<RpcFrame.Event>(extraBufferCapacity = 64)
+    override val events = MutableSharedFlow<RpcFrame.Event>(extraBufferCapacity = 8192)
     override val serverRequests = MutableSharedFlow<RpcFrame.ServerRequest>(extraBufferCapacity = 64)
 
-    val calls = mutableListOf<Pair<String, JsonObject>>()
+    val calls: MutableList<Pair<String, JsonObject>> = CopyOnWriteArrayList()
     val answers = mutableListOf<Pair<String, JsonObject>>()
-    private val handlers = mutableMapOf<String, suspend (JsonObject) -> JsonElement>()
+    private val handlers = ConcurrentHashMap<String, suspend (JsonObject) -> JsonElement>()
+
+    init {
+        // What an idle live session answers; tests override the ones they care about.
+        on("session.events.since", """{"events":[],"latest_seq":0,"truncated":false,"epoch":"e1","open_requests":[]}""")
+        on("session.activate", """{"session_id":"live1","messages":[],"running":false,"open_requests":[]}""")
+    }
 
     fun on(method: String, handler: suspend (JsonObject) -> JsonElement) {
         handlers[method] = handler
@@ -79,7 +100,7 @@ class ChatControllerTest {
 
         chat.open("stored1")
 
-        assertEquals("stored1", peer.calls.single().second["session_id"]!!.jsonPrimitive.content)
+        assertEquals("stored1", peer.calls.first().second["session_id"]!!.jsonPrimitive.content)
         assertEquals("live1", chat.state.value.liveSessionId)
         assertEquals("stored1", chat.state.value.storedSessionId)
         assertEquals(listOf(ChatItem.User("hi"), ChatItem.Assistant("yo", streaming = false)), chat.state.value.items)
@@ -211,8 +232,13 @@ class ChatControllerTest {
         assertEquals("session.interrupt" to obj("""{"session_id":"live1"}"""), peer.calls.last())
     }
 
-    private fun sinceResult(events: String, truncated: Boolean = false, openRequests: String = "[]") =
-        """{"events":$events,"latest_seq":5,"truncated":$truncated,"epoch":1,"open_requests":$openRequests}"""
+    private fun sinceResult(
+        events: String,
+        truncated: Boolean = false,
+        openRequests: String = "[]",
+        latestSeq: Int = 5,
+        epoch: String = "e1",
+    ) = """{"events":$events,"latest_seq":$latestSeq,"truncated":$truncated,"epoch":"$epoch","open_requests":$openRequests}"""
 
     private fun delta(seq: Int, text: String) =
         """{"type":"message.delta","session_id":"live1","seq":$seq,"payload":{"text":"$text"}}"""
@@ -255,7 +281,7 @@ class ChatControllerTest {
 
         dropConnection(peer)
 
-        assertEquals("session.resume" to obj("""{"session_id":"stored1"}"""), peer.calls.last())
+        assertEquals("session.resume" to obj("""{"session_id":"stored1"}"""), peer.calls.last { it.first == "session.resume" })
         assertEquals(listOf<ChatItem>(ChatItem.Assistant("fresh", streaming = false)), chat.state.value.items)
     }
 
@@ -279,7 +305,8 @@ class ChatControllerTest {
 
         peer.state.value = ConnectionState.Ready
 
-        assertEquals(listOf("session.create"), peer.calls.map { it.first })
+        // session.create plus the probe that anchors the replay position; no resync follows.
+        assertEquals(listOf("session.create", "session.events.since"), peer.calls.map { it.first })
     }
 
     @Test fun closeStopsCollecting() = test { peer, chat ->
@@ -290,5 +317,131 @@ class ChatControllerTest {
         peer.event("message.start", seq = 1)
 
         assertTrue(chat.state.value.items.isEmpty())
+    }
+
+    private fun callNames(peer: FakePeer) = peer.calls.map { it.first }
+
+    @Test fun dropReattachesWithActivateBeforeReplayingEvents() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":true,"open_requests":[$APPROVAL_REQUEST]}""")
+        val before = peer.calls.size
+
+        dropConnection(peer)
+
+        assertEquals(listOf("session.activate", "session.events.since"), peer.calls.drop(before).map { it.first })
+        assertEquals(obj("""{"session_id":"live1","omit_messages":true}"""), peer.calls[before].second)
+        assertEquals("srq-1", (chat.state.value.items.single() as ChatItem.Approval).requestId)
+    }
+
+    @Test fun reopenedLiveSessionDropDoesNotReplayOldEvents() = test { peer, chat ->
+        // session.resume reuses the live sid, so its ring still holds seqs 1-7 from before the open.
+        peer.on("session.resume", resumeResult("""[{"role":"assistant","text":"yo"}]"""))
+        peer.on("session.events.since", sinceResult("[]", latestSeq = 7))
+        chat.open("stored1")
+        peer.on("session.events.since", sinceResult((3..7).joinToString(",", "[", "]") { delta(it, "x") }, latestSeq = 7))
+
+        dropConnection(peer)
+
+        assertEquals(listOf<ChatItem>(ChatItem.Assistant("yo", streaming = false)), chat.state.value.items)
+        assertEquals(7, chat.state.value.lastSeq)
+    }
+
+    @Test fun serverRestartReopensStoredSession() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        peer.on("session.events.since", sinceResult("[]", epoch = "e2", latestSeq = 0))
+        peer.on("session.resume", resumeResult("""[{"role":"assistant","text":"fresh"}]"""))
+
+        dropConnection(peer)
+
+        assertEquals("session.resume" to obj("""{"session_id":"stored1"}"""), peer.calls.last { it.first == "session.resume" })
+        assertEquals(listOf<ChatItem>(ChatItem.Assistant("fresh", streaming = false)), chat.state.value.items)
+    }
+
+    @Test fun lowerLatestSeqThanSeenReopensStoredSession() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        peer.event("message.start", seq = 1)
+        peer.event("message.delta", """{"text":"a"}""", seq = 2)
+        peer.on("session.events.since", sinceResult("[]", latestSeq = 0))
+        peer.on("session.resume", resumeResult("""[{"role":"assistant","text":"fresh"}]"""))
+
+        dropConnection(peer)
+
+        assertEquals(listOf<ChatItem>(ChatItem.Assistant("fresh", streaming = false)), chat.state.value.items)
+    }
+
+    @Test fun activateRefusedReopensStoredSession() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        peer.on("session.activate") { throw RpcException(RpcError(4007, "session not found")) }
+        peer.on("session.resume", resumeResult("""[{"role":"assistant","text":"fresh"}]"""))
+
+        dropConnection(peer)
+
+        assertEquals(listOf<ChatItem>(ChatItem.Assistant("fresh", streaming = false)), chat.state.value.items)
+        assertEquals("live1", chat.state.value.liveSessionId)
+    }
+
+    @Test fun failedSendAddsErrorAndStopsRunning() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        peer.on("prompt.submit") { throw IOException("Connection closed") }
+        chat.startNew()
+
+        try {
+            chat.send("hello")
+            fail("expected the send to fail")
+        } catch (_: IOException) {
+        }
+
+        assertFalse(chat.state.value.running)
+        assertEquals(ChatItem.User("hello"), chat.state.value.items.first())
+        assertEquals(ChatItem.Error("Connection closed"), chat.state.value.items.last())
+    }
+
+    @Test fun eventsAcrossRepeatedResyncsOnRealThreadsAreAppliedOnceInOrder() = runBlocking {
+        // Producer, collector and resync coroutines run on separate threads. A smoke test, not a
+        // proof: the window for a lost event is a few instructions wide, so a mutant that flushes
+        // outside the lock was not caught in 3 runs. The locking itself is by construction (one
+        // lock around every state change and around the hold/flush decision).
+        val total = 3000
+        val peer = FakePeer()
+        val scope = CoroutineScope(Dispatchers.Default + Job())
+        val chat = ChatController(peer, scope) { NOW }
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        val emitted = CopyOnWriteArrayList<String>()
+        peer.on("session.events.since") { params ->
+            val from = params["last_seen"]!!.jsonPrimitive.content.toLong().coerceAtMost(emitted.size.toLong()).toInt()
+            val snapshot = emitted.toList()
+            Json.parseToJsonElement(sinceResult(
+                (from + 1..snapshot.size).joinToString(",", "[", "]") { delta(it, snapshot[it - 1]) },
+                latestSeq = snapshot.size,
+            ))
+        }
+        try {
+            val producer = launch(Dispatchers.Default) {
+                for (i in 1..total) {
+                    val char = ('a' + i % 26).toString()
+                    emitted += char
+                    peer.event("message.delta", """{"text":"$char"}""", seq = i.toLong())
+                    if (i % 50 == 0) yield()
+                }
+            }
+            while (producer.isActive) {
+                dropConnection(peer)
+                delay(1)
+            }
+            dropConnection(peer)
+            val expected = (1..total).joinToString("") { ('a' + it % 26).toString() }
+            withTimeout(20_000) {
+                while ((chat.state.value.items.lastOrNull() as? ChatItem.Assistant)?.markdown != expected) delay(20)
+            }
+            assertEquals(1, chat.state.value.items.size)
+        } finally {
+            chat.close()
+            scope.cancel()
+        }
     }
 }

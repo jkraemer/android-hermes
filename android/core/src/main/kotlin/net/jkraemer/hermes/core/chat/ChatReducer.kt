@@ -60,6 +60,7 @@ private fun applyEvent(state: ChatState, event: RpcFrame.Event): ChatState {
         "message.start" -> state.copy(items = state.items + ChatItem.Assistant("", streaming = true))
         "message.delta" -> appendDelta(state, payload["text"].string() ?: "")
         "message.complete" -> completeMessage(state, payload)
+        "error" -> state.copy(items = state.items + ChatItem.Error(payload["message"].string() ?: "error"), running = false)
         "tool.start" -> startTool(state, payload)
         "tool.complete" -> completeTool(state, payload)
         "request.cancel" -> {

@@ -16,11 +16,29 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import java.io.File
+import java.net.InetAddress
+import java.net.Socket
+import java.util.concurrent.CopyOnWriteArrayList
+import javax.net.SocketFactory
 
 /** A logged-in client of the e2e Hermes: REST, the RPC connection and chat controllers on it. */
 class E2eClient private constructor(cookieFile: File) : AutoCloseable {
     private val scope = CoroutineScope(Dispatchers.Default + Job())
-    private val httpClient = OkHttpClient.Builder().cookieJar(PersistentCookieJar(FileCookieStore(cookieFile))).build()
+    private val sockets = CopyOnWriteArrayList<Socket>()
+    private val httpClient = OkHttpClient.Builder()
+        .cookieJar(PersistentCookieJar(FileCookieStore(cookieFile)))
+        // Remembers the TCP sockets so a test can cut the connection the way a network loss would.
+        .socketFactory(object : SocketFactory() {
+            private val default = getDefault()
+            override fun createSocket(): Socket = default.createSocket().also { sockets += it }
+            override fun createSocket(host: String, port: Int): Socket = default.createSocket(host, port).also { sockets += it }
+            override fun createSocket(host: String, port: Int, localHost: InetAddress, localPort: Int): Socket =
+                default.createSocket(host, port, localHost, localPort).also { sockets += it }
+            override fun createSocket(host: InetAddress, port: Int): Socket = default.createSocket(host, port).also { sockets += it }
+            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+                default.createSocket(address, port, localAddress, localPort).also { sockets += it }
+        })
+        .build()
     private val baseUrl = E2eEnv.url.toHttpUrl()
     private val auth = HermesAuth(baseUrl, httpClient)
     private val controllers = mutableListOf<ChatController>()
@@ -30,6 +48,12 @@ class E2eClient private constructor(cookieFile: File) : AutoCloseable {
 
     /** Created before any session is opened, so no event or request is missed. */
     fun newChat(): ChatController = ChatController(rpc, scope).also { controllers += it }
+
+    /** Closes the TCP sockets without a WebSocket close, so [rpc] sees an unexpected drop. */
+    fun dropGatewayConnection() {
+        check(sockets.isNotEmpty()) { "no connection to drop" }
+        sockets.forEach { it.close() }
+    }
 
     override fun close() {
         controllers.forEach { it.close() }

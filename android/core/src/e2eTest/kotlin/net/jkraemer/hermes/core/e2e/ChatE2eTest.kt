@@ -80,7 +80,7 @@ class ChatE2eTest {
 
         val answered = chat.state.value.approval()!!
         assertEquals(CardStatus.Answered("Denied"), answered.status)
-        chat.awaitState { !it.running } ?: failMisstep(chat)
+        chat.awaitState { !it.running } ?: failTurnNotEnded(chat)
         assertTrue("the denied command must not have run", directory.exists())
     }
 
@@ -93,7 +93,7 @@ class ChatE2eTest {
         answerGuarded(chat, command, card, ApprovalChoice.ONCE)
 
         assertEquals(CardStatus.Answered("Allowed once"), chat.state.value.approval()!!.status)
-        chat.awaitState { !it.running } ?: failMisstep(chat)
+        chat.awaitState { !it.running } ?: failTurnNotEnded(chat)
         assertFalse("the allowed command should have removed the directory", directory.exists())
     }
 
@@ -106,7 +106,7 @@ class ChatE2eTest {
         chat.answerClarify(card.requestId, mapOf(card.questions.first().qid to listOf("red")))
 
         assertEquals(CardStatus.Answered("Answered"), chat.state.value.clarify()!!.status)
-        val final = chat.awaitState { !it.running && it.hasFinishedReplyContaining("red") }
-        assertTrue("final reply should mention red: ${chat.state.value.lastAgentOutput()}", final != null)
+        chat.awaitState { !it.running && it.hasFinishedReplyContaining("red") } ?: failTurnNotEnded(chat)
+        Unit
     }
 }

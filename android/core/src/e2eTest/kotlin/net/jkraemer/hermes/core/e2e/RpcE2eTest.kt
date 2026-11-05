@@ -2,7 +2,9 @@ package net.jkraemer.hermes.core.e2e
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -82,5 +84,24 @@ class RpcE2eTest {
     private fun sinceParams(live: String) = buildJsonObject {
         put("session_id", live)
         put("last_seen", 0)
+    }
+
+    @Test
+    fun reattachKeepsSessionAliveAfterDrop() = runBlocking {
+        val app = E2eClient.connect(folder.newFile()).also { client = it }
+        val chat = app.newChat().also { it.startNew() }
+        val live = chat.state.value.liveSessionId!!
+
+        app.dropGatewayConnection()
+        withTimeout(30_000) { app.rpc.state.first { it == ConnectionState.Connecting } }
+        withTimeout(60_000) { app.rpc.state.first { it == ConnectionState.Ready } }
+        // Hermes reaps a detached session after about 20 s unless something reattaches it.
+        delay(25_000)
+
+        assertEquals("the session must be reattached, not reopened under a new id", live, chat.state.value.liveSessionId)
+        val title = app.rpc.call("session.title", buildJsonObject { put("session_id", live) })
+        assertTrue("session.title on the live session answered: $title", title is JsonObject)
+        val since = app.rpc.call("session.events.since", sinceParams(live)).jsonObject
+        assertFalse(since.getValue("truncated").jsonPrimitive.boolean)
     }
 }
