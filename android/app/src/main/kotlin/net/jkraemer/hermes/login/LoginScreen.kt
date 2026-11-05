@@ -32,7 +32,10 @@ fun LoginScreen(viewModel: LoginViewModel, onLoggedIn: () -> Unit) {
     var password by rememberSaveable { mutableStateOf("") }
 
     LaunchedEffect(state.succeeded) {
-        if (state.succeeded) onLoggedIn()
+        if (state.succeeded) {
+            onLoggedIn()
+            viewModel.loginHandled()
+        }
     }
 
     Column(

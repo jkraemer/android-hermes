@@ -1,6 +1,9 @@
 package net.jkraemer.hermes.login
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
@@ -76,6 +79,28 @@ class LoginScreenTest {
         signIn()
         assertEquals(1, loggedIn)
         assertEquals(listOf(Triple("https://hermes.example.ts.net/", "jens", "secret")), attempts)
+    }
+
+    @Test
+    fun showingTheScreenAgainAfterALoginDoesNotLogInAgain() {
+        val viewModel = LoginViewModel("https://hermes.example.ts.net/") { _, _, _ -> LoginResult.Ok }
+        var shown by mutableStateOf(true)
+        compose.setContent {
+            MaterialTheme { if (shown) LoginScreen(viewModel, onLoggedIn = { loggedIn++ }) }
+        }
+        compose.onNodeWithTag("username").performTextInput("jens")
+        compose.onNodeWithTag("password").performTextInput("secret")
+        compose.onNodeWithText("Sign in").performClick()
+        compose.waitForIdle()
+        assertEquals(1, loggedIn)
+
+        shown = false
+        compose.waitForIdle()
+        shown = true
+        compose.waitForIdle()
+
+        compose.onNodeWithTag("login-screen").assertIsDisplayed()
+        assertEquals(1, loggedIn)
     }
 
     @Test

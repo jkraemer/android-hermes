@@ -48,6 +48,11 @@ class LoginViewModel(
         }
     }
 
+    /** Called once the success has been acted on, so showing the screen again does not repeat it. */
+    fun loginHandled() {
+        _state.update { it.copy(succeeded = false) }
+    }
+
     /** Assumes https when there is no scheme; the trailing slash keeps relative API paths resolving below it. */
     private fun parseServerUrl(input: String): HttpUrl? {
         val trimmed = input.trim()

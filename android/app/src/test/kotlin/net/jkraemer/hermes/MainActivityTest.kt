@@ -29,10 +29,14 @@ class MainActivityTest {
     }
 
     /** Points the app at a fake server whose `api/auth/me` answers with [me]; everything else is a 404. */
-    private fun serverAnswering(me: Int) {
+    private fun serverAnswering(me: Int, wsTicket: Int = 404) {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(
-                if (request.path == "/api/auth/me") me else 404,
+                when (request.path) {
+                    "/api/auth/me" -> me
+                    "/api/auth/ws-ticket" -> wsTicket
+                    else -> 404
+                },
             )
         }
         server.start()
@@ -88,6 +92,13 @@ class MainActivityTest {
     fun unreachableServerWithoutCookieShowsLoginScreen() {
         serverAnswering(me = 200)
         server.shutdown()
+        ActivityScenario.launch(MainActivity::class.java).use { awaitTag("login-screen") }
+    }
+
+    @Test
+    fun lostSessionOnTheConnectionShowsLoginScreen() {
+        serverAnswering(me = 200, wsTicket = 401)
+        storeSessionCookie()
         ActivityScenario.launch(MainActivity::class.java).use { awaitTag("login-screen") }
     }
 }
