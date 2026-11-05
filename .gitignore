@@ -1,1 +1,7 @@
 .superpowers/
+
+android/.gradle/
+android/build/
+android/*/build/
+android/local.properties
+e2e/.state/
