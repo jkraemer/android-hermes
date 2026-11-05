@@ -33,8 +33,9 @@ tasks.register<Test>("e2eTest") {
     dependsOn(requireE2eEnv)
     testClassesDirs = e2eTest.output.classesDirs
     classpath = e2eTest.runtimeClasspath
-    // The env file path is written by the e2e setup script.
-    environment("HERMES_E2E_ENV", System.getenv("HERMES_E2E_ENV") ?: "")
+    // The env file is written by the e2e setup script; a relative path is relative to the
+    // Gradle build root, not to this module's test working directory.
+    environment("HERMES_E2E_ENV", System.getenv("HERMES_E2E_ENV")?.let { rootProject.file(it).absolutePath } ?: "")
 }
 
 dependencies {
