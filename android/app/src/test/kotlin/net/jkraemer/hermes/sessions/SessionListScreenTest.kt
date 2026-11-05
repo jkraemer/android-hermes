@@ -16,6 +16,7 @@ import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import net.jkraemer.hermes.core.auth.NotLoggedInException
 import net.jkraemer.hermes.core.sessions.SessionPage
@@ -54,6 +55,10 @@ private class FakeSource(
     val updates = mutableListOf<List<Any?>>()
     val listCalls = mutableListOf<Int>()
 
+    /** When set, searches wait for it; [searchStarted] counts the searches that have begun. */
+    var searchGate: CompletableDeferred<Unit>? = null
+    @Volatile var searchStarted = 0
+
     override suspend fun list(offset: Int, limit: Int): SessionPage {
         failure?.let { throw it }
         listCalls += offset
@@ -62,6 +67,8 @@ private class FakeSource(
 
     override suspend fun search(query: String, limit: Int): List<SessionSummary> {
         failure?.let { throw it }
+        searchStarted++
+        searchGate?.await()
         return searchResults
     }
 
@@ -162,6 +169,36 @@ class SessionListScreenTest {
 
         compose.onNodeWithTag("search").performTextClearance()
         waitForText("Morning briefing")
+    }
+
+    @Test
+    fun aSearchFinishingAfterTheQueryWasClearedDoesNotBringBackSearchRows() {
+        source.searchResults = listOf(session("hit", title = "Sourdough hydration"))
+        show(session("a", title = "Morning briefing"))
+        waitForText("Morning briefing")
+        compose.onNodeWithTag("search").performTextInput("sourdough")
+        waitForText("Sourdough hydration")
+
+        // A refresh searches again; clear the query while that search is in flight.
+        source.searchGate = CompletableDeferred()
+        val started = source.searchStarted
+        compose.onNodeWithTag("session-list").performTouchInput { swipeDown() }
+        compose.waitUntil(10_000) { source.searchStarted > started }
+        compose.onNodeWithTag("search").performTextClearance()
+        source.searchGate!!.complete(Unit)
+
+        waitForText("Morning briefing")
+        compose.waitForIdle()
+        compose.onAllNodes(androidx.compose.ui.test.hasText("Sourdough hydration")).assertCountEquals(0)
+    }
+
+    @Test
+    fun duplicateSearchResultsShowOneRow() {
+        source.searchResults = listOf(session("hit", title = "Sourdough hydration"), session("hit", title = "Sourdough hydration"))
+        show(session("a", title = "Morning briefing"))
+        compose.onNodeWithTag("search").performTextInput("sourdough")
+        waitForText("Sourdough hydration")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("Sourdough hydration")).assertCountEquals(1)
     }
 
     @Test

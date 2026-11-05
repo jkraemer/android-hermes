@@ -138,7 +138,10 @@ class SessionListViewModel(
 
     private suspend fun runSearch(query: String) {
         attempt { source.search(query.trim(), SEARCH_LIMIT) }?.let { results ->
-            loaded.update { it.copy(searchResults = results) }
+            // The query may have changed or been cleared while the search was running.
+            loaded.update {
+                if (it.query.trim() == query.trim()) it.copy(searchResults = results.distinctBy(SessionSummary::id)) else it
+            }
         }
     }
 
