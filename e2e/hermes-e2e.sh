@@ -56,7 +56,6 @@ write_config() {
 model:
   default: "$E2E_MODEL"
   provider: "$E2E_PROVIDER"
-  api_key: "$E2E_API_KEY"
 approvals:
   mode: manual
   timeout: 300
@@ -69,6 +68,16 @@ dashboard:
     secret: "$(persistent_secret signing-secret)"
 YAML
   chmod 600 "$HOME_DIR/config.yaml"
+}
+
+# Hermes reads provider keys from its credential pool (or the provider's env var), not
+# from config.yaml's model section, so the key goes in through `hermes auth add`.
+# The provider's existing entries are removed first (this home holds only ours) to keep
+# `up` repeatable; `auth remove` takes an index because identical labels are ambiguous.
+add_model_key() {
+  while "$E2E_DIR/hermes-cli" auth remove "$E2E_PROVIDER" 1 > /dev/null 2>&1; do :; done
+  "$E2E_DIR/hermes-cli" auth add "$E2E_PROVIDER" --type api-key --label e2e --api-key "$E2E_API_KEY" > /dev/null \
+    || die "could not add the $E2E_PROVIDER key (is E2E_PROVIDER a provider id that takes an API key?)"
 }
 
 write_env_file() {
@@ -122,6 +131,7 @@ up() {
   write_config
   start_container
   wait_for_dashboard
+  add_model_key
   write_env_file
   echo "hermes e2e up; environment in $ENV_FILE"
 }
