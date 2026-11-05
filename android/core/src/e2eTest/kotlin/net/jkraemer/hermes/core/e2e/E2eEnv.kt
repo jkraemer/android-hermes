@@ -16,5 +16,9 @@ object E2eEnv {
     val user: String get() = value("HERMES_USER")
     val password: String get() = value("HERMES_PASSWORD")
 
+    /** The only directory shared between the host and the Hermes container. */
+    val home: String get() = value("HERMES_HOME")
+    val cli: String get() = value("HERMES_BIN")
+
     private fun value(key: String) = requireNotNull(values[key]) { "$key missing from the e2e environment file" }
 }
