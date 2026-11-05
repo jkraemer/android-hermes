@@ -20,6 +20,12 @@ fun ChatState.lastAgentOutput(): String =
 
 private fun ChatState.hasError() = items.any { it is ChatItem.Error }
 
+/** An error ending the turn is the provider or harness failing, which says nothing about the model or the app. */
+private fun ChatController.failIfTurnErrored() {
+    val error = state.value.items.lastOrNull { it is ChatItem.Error } as ChatItem.Error? ?: return
+    throw AssertionError("turn ended in an error (provider/harness, not a model misstep): ${error.message}")
+}
+
 fun ChatState.hasFinishedReplyContaining(text: String) =
     items.any { it is ChatItem.Assistant && !it.streaming && it.markdown.contains(text, ignoreCase = true) }
 
@@ -30,13 +36,18 @@ suspend fun ChatController.awaitState(timeoutMs: Long = MODEL_TIMEOUT_MS, predic
 /** Sends [prompt] and waits for a finished assistant message containing [expected]. */
 suspend fun ChatController.sendAndAwaitReply(prompt: String, expected: String): ChatState {
     send(prompt)
-    return awaitState { it.hasFinishedReplyContaining(expected) }
-        ?: throw AssertionError("no reply containing '$expected' (waited up to ${MODEL_TIMEOUT_MS / 1000} s): ${state.value.lastAgentOutput()}")
+    awaitState { it.hasFinishedReplyContaining(expected) }?.let { return it }
+    failIfTurnErrored()
+    throw AssertionError("no reply containing '$expected' (waited up to ${MODEL_TIMEOUT_MS / 1000} s): ${state.value.lastAgentOutput()}")
 }
 
-fun failMisstep(chat: ChatController): Nothing =
+fun failMisstep(chat: ChatController): Nothing {
+    chat.failIfTurnErrored()
     throw AssertionError("agent did not follow the prompt (model misstep, not an app bug): ${chat.state.value.lastAgentOutput()}")
+}
 
 /** For waits after a card was answered: the agent had done what the prompt asked, so a hang is ours to explain. */
-fun failTurnNotEnded(chat: ChatController): Nothing =
+fun failTurnNotEnded(chat: ChatController): Nothing {
+    chat.failIfTurnErrored()
     throw AssertionError("turn did not end after answering (protocol problem?): ${chat.state.value.lastAgentOutput()}")
+}
