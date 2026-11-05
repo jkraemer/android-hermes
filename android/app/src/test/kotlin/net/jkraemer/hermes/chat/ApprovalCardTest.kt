@@ -78,6 +78,15 @@ class ApprovalCardTest {
     }
 
     @Test
+    fun openCardPastItsDeadlineShowsExpiredWithoutButtons() {
+        show(approval(deadline = NOW))
+
+        compose.onNodeWithText("Expired").assertIsDisplayed()
+        compose.onNodeWithText("Allow once").assertDoesNotExist()
+        compose.onNodeWithText("Deny").assertDoesNotExist()
+    }
+
+    @Test
     fun cancelledStateShowsReason() {
         show(approval(status = CardStatus.Cancelled("interrupted")))
         compose.onNodeWithText("Cancelled: interrupted").assertIsDisplayed()

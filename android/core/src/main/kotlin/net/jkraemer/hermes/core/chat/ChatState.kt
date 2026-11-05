@@ -62,4 +62,7 @@ sealed interface ChatInput {
     data class Event(val event: RpcFrame.Event) : ChatInput
     data class Request(val request: RpcFrame.ServerRequest, val receivedAt: Instant) : ChatInput
     data class Answered(val requestId: String, val label: String) : ChatInput
+
+    /** The ids of the server requests Hermes reports as still unanswered. */
+    data class OpenRequests(val ids: Set<String>) : ChatInput
 }

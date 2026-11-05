@@ -17,7 +17,30 @@ fun reduce(state: ChatState, input: ChatInput): ChatState = when (input) {
     is ChatInput.Event -> reduceEvent(state, input.event)
     is ChatInput.Request -> reduceRequest(state, input.request, input.receivedAt)
     is ChatInput.Answered -> state.updateCard(input.requestId) { CardStatus.Answered(input.label) }
+    is ChatInput.OpenRequests -> reconcileCards(state, input.ids)
 }
+
+/**
+ * Hermes emits nothing when another client answers a request, so the list of open requests is
+ * the only truth: an open card missing from it was answered elsewhere, and a card this client
+ * marked answered but that is still listed never got its answer through.
+ */
+private fun reconcileCards(state: ChatState, openIds: Set<String>): ChatState =
+    state.copy(items = state.items.map { item ->
+        when {
+            item is ChatItem.Approval && item.requestId !in openIds && item.status == CardStatus.Open ->
+                item.copy(status = CardStatus.Cancelled(ANSWERED_ELSEWHERE))
+            item is ChatItem.Clarify && item.requestId !in openIds && item.status == CardStatus.Open ->
+                item.copy(status = CardStatus.Cancelled(ANSWERED_ELSEWHERE))
+            item is ChatItem.Approval && item.requestId in openIds && item.status is CardStatus.Answered ->
+                item.copy(status = CardStatus.Open)
+            item is ChatItem.Clarify && item.requestId in openIds && item.status is CardStatus.Answered ->
+                item.copy(status = CardStatus.Open)
+            else -> item
+        }
+    })
+
+private const val ANSWERED_ELSEWHERE = "answered elsewhere"
 
 private fun JsonElement?.string(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 private fun JsonElement?.boolean(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull

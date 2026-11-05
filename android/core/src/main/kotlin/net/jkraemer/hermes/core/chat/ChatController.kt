@@ -112,8 +112,9 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
     }
 
     suspend fun answerApproval(requestId: String, choice: ApprovalChoice) {
+        // Past its deadline Hermes has already denied the request; a late answer would only be misreported.
         val open = _state.value.items.any {
-            it is ChatItem.Approval && it.requestId == requestId && it.status == CardStatus.Open
+            it is ChatItem.Approval && it.requestId == requestId && it.status == CardStatus.Open && clock().isBefore(it.deadline)
         }
         if (!open) throw AnswerRefusedException(requestId)
         peer.answer(requestId, buildJsonObject { put("choice", choice.wire) })
@@ -193,18 +194,24 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
 
     // Only open_requests are replayed: they carry the srq id an answer must target.
     // session.resume's pending_approval cannot be answered by a response frame.
+    // The list is complete, so cards it does not mention are settled against it.
     private fun feedOpenRequests(result: JsonObject) {
-        for (element in (result["open_requests"] as? JsonArray).orEmpty()) {
+        val open = result["open_requests"] as? JsonArray ?: return
+        val ids = mutableSetOf<String>()
+        for (element in open) {
             val request = element as? JsonObject ?: continue
+            val id = request.string("id") ?: continue
+            ids += id
             feed(ChatInput.Request(
                 RpcFrame.ServerRequest(
-                    id = request.string("id") ?: continue,
+                    id = id,
                     method = request.string("method") ?: continue,
                     params = request["params"] as? JsonObject ?: JsonObject(emptyMap()),
                 ),
                 clock(),
             ))
         }
+        feed(ChatInput.OpenRequests(ids))
     }
 
     /**

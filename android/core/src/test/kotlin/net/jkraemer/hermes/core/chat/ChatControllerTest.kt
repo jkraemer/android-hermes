@@ -325,13 +325,16 @@ class ChatControllerTest {
         peer.on("session.create", resumeResult())
         chat.startNew()
         peer.on("session.activate", """{"session_id":"live1","messages":[],"running":true,"open_requests":[$APPROVAL_REQUEST]}""")
+        peer.on("session.events.since", sinceResult("[]", latestSeq = 0, openRequests = "[$APPROVAL_REQUEST]"))
         val before = peer.calls.size
 
         dropConnection(peer)
 
         assertEquals(listOf("session.activate", "session.events.since"), peer.calls.drop(before).map { it.first })
         assertEquals(obj("""{"session_id":"live1","omit_messages":true}"""), peer.calls[before].second)
-        assertEquals("srq-1", (chat.state.value.items.single() as ChatItem.Approval).requestId)
+        val card = chat.state.value.items.single() as ChatItem.Approval
+        assertEquals("srq-1", card.requestId)
+        assertEquals(CardStatus.Open, card.status)
     }
 
     @Test fun reopenedLiveSessionDropDoesNotReplayOldEvents() = test { peer, chat ->
@@ -443,5 +446,64 @@ class ChatControllerTest {
             chat.close()
             scope.cancel()
         }
+    }
+
+    @Test fun cardsAnsweredElsewhereAreCancelledAfterReattach() = test { peer, chat ->
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST,$CLARIFY_REQUEST]"))
+        chat.open("stored1")
+        // The other client answered both; Hermes lists neither any more and emits no event.
+        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":false,"open_requests":[]}""")
+
+        dropConnection(peer)
+
+        assertEquals(
+            listOf(CardStatus.Cancelled("answered elsewhere"), CardStatus.Cancelled("answered elsewhere")),
+            chat.state.value.items.map { (it as? ChatItem.Approval)?.status ?: (it as ChatItem.Clarify).status },
+        )
+    }
+
+    @Test fun cardMissingFromEventsSinceIsCancelled() = test { peer, chat ->
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST]"))
+        chat.open("stored1")
+        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":false,"open_requests":[$APPROVAL_REQUEST]}""")
+        peer.on("session.events.since", sinceResult("[]", latestSeq = 0, openRequests = "[]"))
+
+        dropConnection(peer)
+
+        assertEquals(CardStatus.Cancelled("answered elsewhere"), (chat.state.value.items.single() as ChatItem.Approval).status)
+    }
+
+    @Test fun answeredCardStillListedGoesBackToOpen() = test { peer, chat ->
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST,$CLARIFY_REQUEST]"))
+        chat.open("stored1")
+        chat.answerApproval("srq-1", ApprovalChoice.ONCE)
+        chat.answerClarify("srq-2", mapOf("q1" to listOf("red"), "q2" to listOf("a")))
+        // The answer frames were lost: Hermes still waits on both.
+        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":false,"open_requests":[$APPROVAL_REQUEST,$CLARIFY_REQUEST]}""")
+        peer.on("session.events.since", sinceResult("[]", latestSeq = 0, openRequests = "[$APPROVAL_REQUEST,$CLARIFY_REQUEST]"))
+
+        dropConnection(peer)
+
+        assertEquals(
+            listOf(CardStatus.Open, CardStatus.Open),
+            chat.state.value.items.map { (it as? ChatItem.Approval)?.status ?: (it as ChatItem.Clarify).status },
+        )
+    }
+
+    @Test fun answerApprovalAfterDeadlineIsRefused() = runTest(UnconfinedTestDispatcher()) {
+        var now = NOW
+        val peer = FakePeer()
+        val chat = ChatController(peer, backgroundScope) { now }
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST]"))
+        chat.open("stored1")
+        now = NOW.plusSeconds(APPROVAL_TIMEOUT_SECONDS)
+
+        try {
+            chat.answerApproval("srq-1", ApprovalChoice.ONCE)
+            fail("expected AnswerRefusedException")
+        } catch (_: AnswerRefusedException) {
+        }
+        assertTrue(peer.answers.isEmpty())
+        assertEquals(CardStatus.Open, (chat.state.value.items.single() as ChatItem.Approval).status)
     }
 }

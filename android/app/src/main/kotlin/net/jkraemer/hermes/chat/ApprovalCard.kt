@@ -63,10 +63,12 @@ fun ApprovalCard(item: ChatItem.Approval, clock: () -> Instant, onChoose: (Appro
 
             val closed = item.status.closedLabel()
             if (closed != null) {
-                Text(closed, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                ClosedLabel(closed)
             } else {
-                Countdown(item.deadline, clock)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val remaining = secondsUntil(item.deadline, clock)
+                // Hermes denies on timeout and confirms with its own event; until then the card only stops offering answers.
+                if (remaining == 0L) ClosedLabel("Expired") else Countdown(remaining)
+                if (remaining > 0) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     for (choice in item.choices) ChoiceButton(choice) { onChoose(choice) }
                 }
             }
@@ -87,14 +89,24 @@ private fun ChoiceButton(choice: ApprovalChoice, onClick: () -> Unit) {
 }
 
 @Composable
-private fun Countdown(deadline: Instant, clock: () -> Instant) {
+private fun ClosedLabel(text: String) {
+    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
+/** Whole seconds left until [deadline], re-read every second. */
+@Composable
+private fun secondsUntil(deadline: Instant, clock: () -> Instant): Long {
     val now by produceState(clock()) {
         while (true) {
             value = clock()
             delay(1_000)
         }
     }
-    val remaining = Duration.between(now, deadline).seconds.coerceAtLeast(0)
+    return Duration.between(now, deadline).seconds.coerceAtLeast(0)
+}
+
+@Composable
+private fun Countdown(remaining: Long) {
     Text(
         "auto-deny in ${remaining / 60}:${(remaining % 60).toString().padStart(2, '0')}",
         style = MaterialTheme.typography.labelMedium,
