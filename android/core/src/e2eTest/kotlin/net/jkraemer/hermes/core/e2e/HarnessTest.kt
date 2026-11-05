@@ -10,22 +10,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
-import java.util.Properties
-
-/** Values the e2e setup script writes to the file named by HERMES_E2E_ENV. */
-object E2eEnv {
-    private val values: Map<String, String> by lazy {
-        val path = requireNotNull(System.getenv("HERMES_E2E_ENV")) { "HERMES_E2E_ENV is not set" }
-        val file = File(path)
-        check(file.isFile) { "e2e environment file $path is missing; run e2e/hermes-e2e.sh up" }
-        Properties().apply { file.reader().use { load(it) } }.entries.associate { it.key.toString() to it.value.toString() }
-    }
-
-    val url: String get() = value("HERMES_URL")
-
-    private fun value(key: String) = requireNotNull(values[key]) { "$key missing from the e2e environment file" }
-}
 
 class HarnessTest {
     // Redirects stay visible so an unauthenticated request cannot be mistaken for a served page.
