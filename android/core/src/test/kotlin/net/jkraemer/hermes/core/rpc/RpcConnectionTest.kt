@@ -1,5 +1,6 @@
 package net.jkraemer.hermes.core.rpc
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -33,19 +34,27 @@ import org.junit.Before
 import org.junit.Test
 import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /** The server side of one WebSocket connection: sends gateway.ready, records client frames, answers via [onRequest]. */
 private class FakeGatewaySocket(
+    private val sendReady: Boolean,
     private val onRequest: FakeGatewaySocket.(id: JsonElement, method: String, params: JsonObject) -> Unit,
 ) : WebSocketListener() {
     val received = LinkedBlockingQueue<JsonObject>()
+    val opened = CountDownLatch(1)
     lateinit var socket: WebSocket
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
         socket = webSocket
+        opened.countDown()
+        if (sendReady) sendReady()
+    }
+
+    fun sendReady() {
         send("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"e1"}}}""")
     }
 
@@ -101,9 +110,10 @@ class RpcConnectionTest {
     /** Queues one WebSocket upgrade; capabilities are answered unless [answerCapabilities] is false. */
     private fun enqueueSocket(
         answerCapabilities: Boolean = true,
+        sendReady: Boolean = true,
         onRequest: FakeGatewaySocket.(id: JsonElement, method: String, params: JsonObject) -> Unit = { _, _, _ -> },
     ): FakeGatewaySocket {
-        val socket = FakeGatewaySocket { id, method, params ->
+        val socket = FakeGatewaySocket(sendReady) { id, method, params ->
             if (method == "client.capabilities" && answerCapabilities) reply(id) else onRequest(id, method, params)
         }
         sockets += socket
@@ -294,7 +304,7 @@ class RpcConnectionTest {
             if (method == "ping") pings.incrementAndGet()
             reply(id)
         }
-        val connection = newConnection(pingIntervalMs = 20)
+        val connection = newConnection(pingIntervalMs = 100)
 
         await {
             connection.connect()
@@ -415,7 +425,7 @@ class RpcConnectionTest {
     @Test
     fun closeStopsAllWork() {
         val socket = enqueueSocket()
-        val connection = newConnection(pingIntervalMs = 20)
+        val connection = newConnection(pingIntervalMs = 100)
         await { connection.connect() }
 
         connection.close()
@@ -426,5 +436,188 @@ class RpcConnectionTest {
         // Give a wrongly surviving ping or reconnect loop time to show itself.
         Thread.sleep(100)
         assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun capabilitiesWaitForGatewayReady() {
+        val socket = enqueueSocket(sendReady = false)
+        val connection = newConnection()
+
+        runBlocking {
+            val connecting = scope.async { connection.connect() }
+            socket.opened.await(5, TimeUnit.SECONDS)
+            // Give a client that ignores the missing gateway.ready time to misbehave.
+            Thread.sleep(150)
+            assertTrue(socket.received.isEmpty())
+            assertEquals(ConnectionState.Connecting, connection.state.value)
+
+            socket.sendReady()
+            withTimeout(5_000) { connecting.await() }
+
+            assertEquals(ConnectionState.Ready, connection.state.value)
+        }
+    }
+
+    @Test
+    fun reconnectSurvivesNonIoTicketFailure() {
+        val first = enqueueSocket()
+        enqueueSocket()
+        val calls = AtomicInteger()
+        val connection = newConnection(ticketProvider = {
+            when (calls.incrementAndGet()) {
+                1 -> "t1"
+                2 -> throw IllegalStateException("ws-ticket request failed with 503")
+                else -> "t3"
+            }
+        })
+
+        await {
+            connection.connect()
+            first.socket.close(1001, "going away")
+            connection.awaitState(ConnectionState.Connecting)
+            connection.awaitState(ConnectionState.Ready)
+        }
+
+        assertEquals(3, calls.get())
+    }
+
+    @Test
+    fun connectWithUnexpectedTicketFailureEndsFailed() {
+        val connection = newConnection(ticketProvider = { throw IllegalStateException("boom") })
+
+        val failure = await { runCatching { connection.connect() }.exceptionOrNull() }
+
+        assertTrue("was $failure", failure is IllegalStateException)
+        assertEquals(ConnectionState.Failed("boom", needsLogin = false), connection.state.value)
+    }
+
+    @Test
+    fun failedInitialConnectIsNotRetriedInTheBackground() {
+        server.enqueue(MockResponse().setResponseCode(503))
+        val delays = CopyOnWriteArrayList<Long>()
+        val connection = newConnection(sleep = { delays += it })
+
+        val failure = await { runCatching { connection.connect() }.exceptionOrNull() }
+        Thread.sleep(100)
+
+        assertTrue("was $failure", failure is IOException)
+        val state = connection.state.value
+        assertTrue("was $state", state is ConnectionState.Failed && !state.needsLogin)
+        assertTrue(delays.isEmpty())
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun connectCanBeRetriedAfterFailure() {
+        server.enqueue(MockResponse().setResponseCode(503))
+        enqueueSocket()
+        val connection = newConnection()
+
+        await {
+            assertTrue(runCatching { connection.connect() }.isFailure)
+            connection.connect()
+        }
+
+        assertEquals(ConnectionState.Ready, connection.state.value)
+    }
+
+    @Test
+    fun dropRightAfterCapabilitiesIsNotLeftReady() {
+        enqueueSocket(answerCapabilities = false) { id, _, _ ->
+            reply(id)
+            socket.close(1001, "going away")
+        }
+        val connection = newConnection(sleep = { awaitCancellation() })
+
+        await {
+            if (runCatching { connection.connect() }.isSuccess) {
+                connection.awaitState(ConnectionState.Connecting)
+            } else {
+                assertTrue(connection.state.value is ConnectionState.Failed)
+            }
+        }
+    }
+
+    @Test
+    fun closeWhileAwaitingGatewayReadyReturnsPromptly() {
+        val pings = AtomicInteger()
+        val socket = enqueueSocket(sendReady = false) { id, method, _ ->
+            if (method == "ping") pings.incrementAndGet()
+            reply(id)
+        }
+        val connection = newConnection(pingIntervalMs = 20)
+
+        val failure = await {
+            val connecting = scope.async { runCatching { connection.connect() }.exceptionOrNull() }
+            socket.opened.await(5, TimeUnit.SECONDS)
+            connection.close()
+            connecting.await()
+        }
+        Thread.sleep(100)
+
+        assertTrue("was $failure", failure is IOException)
+        assertEquals(ConnectionState.Disconnected, connection.state.value)
+        assertEquals(0, pings.get())
+    }
+
+    @Test
+    fun pingFailureTriggersReconnect() {
+        enqueueSocket { id, method, _ -> if (method != "ping") reply(id) }
+        enqueueSocket()
+        val connection = newConnection(pingIntervalMs = 100)
+
+        await {
+            connection.connect()
+            connection.awaitState(ConnectionState.Connecting)
+            connection.awaitState(ConnectionState.Ready)
+        }
+
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun connectWhileReadyIsANoOp() {
+        val pings = AtomicInteger()
+        enqueueSocket { id, method, _ ->
+            if (method == "ping") pings.incrementAndGet()
+            reply(id)
+        }
+        val connection = newConnection(pingIntervalMs = 100)
+
+        await {
+            connection.connect()
+            connection.connect()
+        }
+        connection.close()
+        val afterClose = pings.get()
+        Thread.sleep(250)
+
+        assertEquals(1, server.requestCount)
+        assertEquals(afterClose, pings.get())
+    }
+
+    @Test
+    fun connectDuringReconnectJoinsTheLoop() {
+        val first = enqueueSocket()
+        enqueueSocket()
+        val gate = CompletableDeferred<Unit>()
+        val connection = newConnection(sleep = { gate.await() })
+
+        runBlocking {
+            withTimeout(5_000) {
+                connection.connect()
+                first.socket.close(1001, "going away")
+                connection.awaitState(ConnectionState.Connecting)
+                val joined = scope.async { connection.connect() }
+                Thread.sleep(100)
+                assertEquals(1, server.requestCount)
+
+                gate.complete(Unit)
+                joined.await()
+            }
+        }
+
+        assertEquals(ConnectionState.Ready, connection.state.value)
+        assertEquals(2, server.requestCount)
     }
 }

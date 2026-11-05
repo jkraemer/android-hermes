@@ -1,6 +1,7 @@
 package net.jkraemer.hermes.core.rpc
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
@@ -79,33 +80,83 @@ class RpcConnection(
     private val nextId = AtomicLong(1)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonElement>>()
 
+    // Link transitions (current, closed, state changes, ping/attempt jobs) happen under [lock]
+    // because OkHttp callbacks, the caller and the reconnect coroutine all drive them.
+    private val lock = Any()
     @Volatile private var current: Link? = null
     @Volatile private var closed = false
     private var pingJob: Job? = null
-    private var reconnectJob: Job? = null
+    private var attempt: Job? = null
+    private var inflight: CompletableDeferred<Unit>? = null
 
     /**
-     * Opens the socket and returns once the gateway is ready for requests. Throws
-     * [NotLoggedInException] when there is no session, [IOException] when the server cannot be reached.
+     * Opens the socket and returns once the gateway is ready for requests. Does nothing when
+     * already ready; joins the attempt or reconnect loop that is already running. Throws
+     * [NotLoggedInException] when there is no session; any other failure leaves the state
+     * `Failed(needsLogin = false)` and is rethrown. A failed initial connect is not retried
+     * automatically, the caller retries by calling this again.
      */
     suspend fun connect() {
-        closed = false
+        val running = synchronized(lock) {
+            if (_state.value == ConnectionState.Ready) return
+            inflight?.takeIf { it.isActive } ?: run {
+                closed = false
+                launchAttempt { connectOnce() }
+            }
+        }
+        running.await()
+        val state = _state.value
+        if (state is ConnectionState.Failed) {
+            if (state.needsLogin) throw NotLoggedInException()
+            throw IOException(state.reason)
+        }
+    }
+
+    /** Must be called under [lock]. */
+    private fun launchAttempt(block: suspend () -> Unit): CompletableDeferred<Unit> {
+        val outcome = CompletableDeferred<Unit>()
+        inflight = outcome
+        attempt = scope.launch {
+            try {
+                block()
+                outcome.complete(Unit)
+            } catch (e: CancellationException) {
+                outcome.completeExceptionally(IOException("Connection closed"))
+                throw e
+            } catch (e: Throwable) {
+                outcome.completeExceptionally(e)
+            }
+        }
+        return outcome
+    }
+
+    private suspend fun connectOnce() {
         try {
             establish()
         } catch (e: NotLoggedInException) {
-            _state.value = ConnectionState.Failed("Not logged in", needsLogin = true)
+            transition(ConnectionState.Failed("Not logged in", needsLogin = true))
             throw e
-        } catch (e: IOException) {
-            _state.value = ConnectionState.Failed(e.message ?: "Connection failed", needsLogin = false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            transition(ConnectionState.Failed(e.message ?: "Connection failed", needsLogin = false))
             throw e
         }
     }
 
+    /** A closed connection stays [ConnectionState.Disconnected]. */
+    private fun transition(newState: ConnectionState) {
+        synchronized(lock) { if (!closed) _state.value = newState }
+    }
+
     private suspend fun establish() {
-        _state.value = ConnectionState.Connecting
+        transition(ConnectionState.Connecting)
         val ticket = ticketProvider()
         val link = Link()
-        current = link
+        synchronized(lock) {
+            if (closed) throw IOException("Connection closed")
+            current = link
+        }
         try {
             val url = baseUrl.resolve("api/ws")!!.newBuilder().addQueryParameter("ticket", ticket).build()
             link.webSocket = client.newWebSocket(Request.Builder().url(url).build(), listenerFor(link))
@@ -115,28 +166,30 @@ class RpcConnection(
                 throw IOException("Timed out waiting for gateway.ready")
             }
             call("client.capabilities", buildJsonObject { put("server_requests", true) })
+            synchronized(lock) {
+                // The socket may have dropped or the connection been closed since the response.
+                if (current !== link || closed) throw IOException("Connection closed")
+                link.established = true
+                _state.value = ConnectionState.Ready
+                pingJob = scope.launch { pingForever(link) }
+            }
         } catch (e: Throwable) {
-            if (current === link) current = null
+            synchronized(lock) { if (current === link) current = null }
             link.webSocket?.cancel()
             throw e
         }
-        if (closed) {
-            link.webSocket?.cancel()
-            throw IOException("Connection closed")
-        }
-        link.established = true
-        _state.value = ConnectionState.Ready
-        pingJob = scope.launch { pingForever() }
     }
 
-    private suspend fun pingForever() {
+    private suspend fun pingForever(link: Link) {
         while (true) {
             delay(pingIntervalMs)
             try {
-                call("ping")
+                call("ping", timeoutMs = pingIntervalMs)
             } catch (e: IOException) {
-                // No answer means the socket is dead; cancelling surfaces it as a drop.
-                current?.webSocket?.cancel()
+                // No answer means the socket is dead.
+                dropped(link, e)
+                link.webSocket?.cancel()
+                return
             } catch (_: RpcException) {
             }
         }
@@ -185,14 +238,18 @@ class RpcConnection(
     }
 
     fun close() {
-        closed = true
-        reconnectJob?.cancel()
-        pingJob?.cancel()
-        val link = current
-        current = null
-        link?.webSocket?.close(NORMAL_CLOSURE, null)
-        failPending(IOException("Connection closed"))
-        _state.value = ConnectionState.Disconnected
+        val cause = IOException("Connection closed")
+        synchronized(lock) {
+            closed = true
+            attempt?.cancel()
+            pingJob?.cancel()
+            val link = current
+            current = null
+            link?.ready?.completeExceptionally(cause)
+            link?.webSocket?.close(NORMAL_CLOSURE, null)
+            failPending(cause)
+            _state.value = ConnectionState.Disconnected
+        }
     }
 
     private fun send(frame: JsonObject) {
@@ -256,31 +313,35 @@ class RpcConnection(
     }
 
     private fun dropped(link: Link, cause: IOException) {
-        if (current !== link) return
-        current = null
-        link.ready.completeExceptionally(cause)
-        failPending(cause)
-        pingJob?.cancel()
-        // A link that never became ready is reported to whoever is establishing it.
-        if (link.established && !closed) {
-            _state.value = ConnectionState.Connecting
-            reconnectJob = scope.launch { reconnect() }
+        synchronized(lock) {
+            if (current !== link) return
+            current = null
+            link.ready.completeExceptionally(cause)
+            failPending(cause)
+            pingJob?.cancel()
+            // A link that never became ready is reported to whoever is establishing it.
+            if (link.established && !closed) {
+                _state.value = ConnectionState.Connecting
+                launchAttempt { reconnect() }
+            }
         }
     }
 
     private suspend fun reconnect() {
-        var attempt = 0
+        var attempts = 0
         while (!closed) {
-            sleep(reconnectDelayMs(attempt++))
+            sleep(reconnectDelayMs(attempts++))
             if (closed) return
             try {
                 establish()
                 return
             } catch (_: NotLoggedInException) {
-                _state.value = ConnectionState.Failed("Not logged in", needsLogin = true)
+                transition(ConnectionState.Failed("Not logged in", needsLogin = true))
                 return
-            } catch (_: IOException) {
-                _state.value = ConnectionState.Connecting
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                transition(ConnectionState.Connecting)
             }
         }
     }
