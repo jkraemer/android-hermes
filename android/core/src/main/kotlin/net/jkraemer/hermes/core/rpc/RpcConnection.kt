@@ -20,6 +20,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import net.jkraemer.hermes.core.auth.NotLoggedInException
+import net.jkraemer.hermes.core.chat.RpcPeer
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -60,7 +61,7 @@ class RpcConnection(
     private val scope: CoroutineScope,
     private val pingIntervalMs: Long = 15_000,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
-) {
+) : RpcPeer {
     /** One WebSocket attempt. Callbacks from a link that is no longer [current] are stale and ignored. */
     private inner class Link {
         val ready = CompletableDeferred<Unit>()
@@ -69,13 +70,13 @@ class RpcConnection(
     }
 
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Disconnected)
-    val state: StateFlow<ConnectionState> = _state.asStateFlow()
+    override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
     private val _events = MutableSharedFlow<RpcFrame.Event>(extraBufferCapacity = 1024)
-    val events: SharedFlow<RpcFrame.Event> = _events.asSharedFlow()
+    override val events: SharedFlow<RpcFrame.Event> = _events.asSharedFlow()
 
     private val _serverRequests = MutableSharedFlow<RpcFrame.ServerRequest>(extraBufferCapacity = 64)
-    val serverRequests: SharedFlow<RpcFrame.ServerRequest> = _serverRequests.asSharedFlow()
+    override val serverRequests: SharedFlow<RpcFrame.ServerRequest> = _serverRequests.asSharedFlow()
 
     private val nextId = AtomicLong(1)
     private val pending = ConcurrentHashMap<Long, CompletableDeferred<JsonElement>>()
@@ -195,10 +196,10 @@ class RpcConnection(
         }
     }
 
-    suspend fun call(
+    override suspend fun call(
         method: String,
-        params: JsonObject = JsonObject(emptyMap()),
-        timeoutMs: Long = 30_000,
+        params: JsonObject,
+        timeoutMs: Long,
     ): JsonElement {
         val id = nextId.getAndIncrement()
         val response = CompletableDeferred<JsonElement>()
@@ -218,7 +219,7 @@ class RpcConnection(
         }
     }
 
-    suspend fun answer(requestId: String, result: JsonObject) {
+    override suspend fun answer(requestId: String, result: JsonObject) {
         send(buildJsonObject {
             put("jsonrpc", "2.0")
             put("id", requestId)
