@@ -62,4 +62,13 @@ class RpcFrameTest {
         assertNull(parseFrame("[1,2]"))
         assertNull(parseFrame(""))
     }
+
+    @Test
+    fun blankSessionIdOfGlobalEventParsesAsNull() {
+        val frame = parseFrame(
+            """{"jsonrpc":"2.0","method":"event","params":{"type":"approval.cancelled","session_id":"","payload":{"request_ids":["r1"]}}}""",
+        ) as RpcFrame.Event
+
+        assertNull(frame.sessionId)
+    }
 }

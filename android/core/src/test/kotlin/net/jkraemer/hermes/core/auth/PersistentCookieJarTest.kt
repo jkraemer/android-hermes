@@ -74,4 +74,15 @@ class PersistentCookieJarTest {
     fun missingFileLoadsNoCookies() {
         assertTrue(FileCookieStore(java.io.File(folder.root, "absent.json")).load().isEmpty())
     }
+
+    @Test
+    fun unparseableFileLoadsNoCookiesAndNextSaveOverwritesIt() {
+        val file = folder.newFile("cookies.json").also { it.writeText("{not json") }
+        val store = FileCookieStore(file)
+
+        assertTrue(store.load().isEmpty())
+
+        store.save(listOf(cookie("fresh")))
+        assertEquals(listOf("fresh"), store.load().map { it.name })
+    }
 }

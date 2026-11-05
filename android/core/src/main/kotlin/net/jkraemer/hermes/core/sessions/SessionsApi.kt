@@ -58,7 +58,7 @@ private data class SearchResponse(val results: List<SessionRow>)
 
 /** Session list, search and sidebar updates. [client] must carry the dashboard session cookies. */
 class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient) {
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json { ignoreUnknownKeys = true; coerceInputValues = true }
     private val jsonMediaType = "application/json".toMediaType()
     private val excludedSources = EXCLUDED_SOURCES.joinToString(",")
 

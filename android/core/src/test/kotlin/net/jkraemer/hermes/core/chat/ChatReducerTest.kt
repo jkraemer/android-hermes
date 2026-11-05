@@ -3,6 +3,7 @@ package net.jkraemer.hermes.core.chat
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.Json
 import net.jkraemer.hermes.core.rpc.RpcFrame
+import net.jkraemer.hermes.core.rpc.parseFrame
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Test
@@ -83,7 +84,7 @@ class ChatReducerTest {
             event("message.start"),
             event("error", """{"message":"provider down"}"""),
         )
-        assertEquals(listOf(ChatItem.Assistant("", streaming = true), ChatItem.Error("provider down")), state.items)
+        assertEquals(listOf<ChatItem>(ChatItem.Error("provider down")), state.items)
         assertEquals(false, state.running)
     }
 
@@ -251,5 +252,59 @@ class ChatReducerTest {
     @Test fun unknownEventLeavesStateUnchanged() {
         assertEquals(empty, reduce(empty, event("session.info", """{"x":1}""")))
         assertEquals(empty.copy(lastSeq = 4), reduce(empty, event("session.info", seq = 4)))
+    }
+
+    @Test fun globalApprovalCancelledWithBlankSessionIdReachesTheCard() {
+        val global = parseFrame(
+            """{"jsonrpc":"2.0","method":"event","params":{"type":"approval.cancelled","session_id":"","payload":{"request_ids":["r1"],"reason":"timeout"}}}""",
+        ) as RpcFrame.Event
+        val state = run(
+            empty,
+            request("srq-1", "approval", """{"request_id":"r1","command":"c"}"""),
+            ChatInput.Event(global),
+        )
+        assertEquals(CardStatus.Expired, (state.items.single() as ChatItem.Approval).status)
+    }
+
+    @Test fun completeDropsEmptyStreamingItemLeftByToolOnlyTurn() {
+        val state = run(
+            empty,
+            ChatInput.UserSent("q"),
+            event("message.start"),
+            event("tool.start", """{"tool_id":"t1","name":"ls"}"""),
+            event("tool.complete", """{"tool_id":"t1"}"""),
+            event("message.complete", """{"text":"done"}"""),
+        )
+        assertEquals(
+            listOf(
+                ChatItem.User("q"),
+                ChatItem.Tools(listOf(ToolCall("t1", "ls", null, true, false))),
+                ChatItem.Assistant("done", streaming = false),
+            ),
+            state.items,
+        )
+    }
+
+    @Test fun completeWithoutTextDropsEmptyStreamingItem() {
+        val state = run(empty, event("message.start"), event("message.complete"))
+        assertEquals(emptyList<ChatItem>(), state.items)
+        assertEquals(false, state.running)
+    }
+
+    @Test fun errorDropsEmptyStreamingItem() {
+        val state = run(empty, event("message.start"), event("error", """{"message":"boom"}"""))
+        assertEquals(listOf<ChatItem>(ChatItem.Error("boom")), state.items)
+    }
+
+    @Test fun messageStartReusesEmptyStreamingItem() {
+        val state = run(
+            empty,
+            event("message.start"),
+            event("tool.start", """{"tool_id":"t1","name":"ls"}"""),
+            event("message.start"),
+            event("message.delta", """{"text":"hi"}"""),
+        )
+        assertEquals(1, state.items.count { it is ChatItem.Assistant })
+        assertEquals(ChatItem.Assistant("hi", streaming = true), state.items.last())
     }
 }

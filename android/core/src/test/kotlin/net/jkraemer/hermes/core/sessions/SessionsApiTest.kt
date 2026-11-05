@@ -151,4 +151,13 @@ class SessionsApiTest {
             }
         }
     }
+
+    @Test
+    fun explicitNullsFallBackToDefaults() {
+        val summary = listOne("""{"id":"s1","pinned":null,"archived":null,"message_count":null}""")
+
+        assertFalse(summary.pinned)
+        assertFalse(summary.archived)
+        assertEquals(0, summary.messageCount)
+    }
 }

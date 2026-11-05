@@ -1,5 +1,6 @@
 package net.jkraemer.hermes.core.auth
 
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.Cookie
@@ -28,7 +29,12 @@ class FileCookieStore(private val file: File) : CookieStore {
         if (!file.isFile) return emptyList()
         val text = file.readText()
         if (text.isBlank()) return emptyList()
-        return Json.decodeFromString<List<StoredCookie>>(text).map { it.toCookie() }
+        // A corrupt file must not stop the app from starting; the next save replaces it.
+        return try {
+            Json.decodeFromString<List<StoredCookie>>(text).map { it.toCookie() }
+        } catch (_: SerializationException) {
+            emptyList()
+        }
     }
 
     override fun save(cookies: List<Cookie>) {

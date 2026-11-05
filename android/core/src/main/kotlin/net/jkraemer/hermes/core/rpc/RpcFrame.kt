@@ -39,7 +39,8 @@ fun parseFrame(line: String): RpcFrame? {
             val type = params["type"].asString() ?: return null
             RpcFrame.Event(
                 type = type,
-                sessionId = params["session_id"].asString(),
+                // Hermes sends "" for global broadcasts such as approval.cancelled.
+                sessionId = params["session_id"].asString()?.takeIf { it.isNotEmpty() },
                 seq = (params["seq"] as? JsonPrimitive)?.longOrNull,
                 payload = params["payload"] as? JsonObject ?: JsonObject(emptyMap()),
             )

@@ -57,10 +57,15 @@ private fun reduceEvent(state: ChatState, event: RpcFrame.Event): ChatState {
 private fun applyEvent(state: ChatState, event: RpcFrame.Event): ChatState {
     val payload = event.payload
     return when (event.type) {
-        "message.start" -> state.copy(items = state.items + ChatItem.Assistant("", streaming = true))
+        "message.start" -> {
+            // Text must follow the tool lines already shown, so a stale empty item is replaced, not reused in place.
+            val items = withoutEmptyStreaming(state.items)
+            if (items.any { it is ChatItem.Assistant && it.streaming }) state.copy(items = items)
+            else state.copy(items = items + ChatItem.Assistant("", streaming = true))
+        }
         "message.delta" -> appendDelta(state, payload["text"].string() ?: "")
         "message.complete" -> completeMessage(state, payload)
-        "error" -> state.copy(items = state.items + ChatItem.Error(payload["message"].string() ?: "error"), running = false)
+        "error" -> state.copy(items = withoutEmptyStreaming(state.items) + ChatItem.Error(payload["message"].string() ?: "error"), running = false)
         "tool.start" -> startTool(state, payload)
         "tool.complete" -> completeTool(state, payload)
         "request.cancel" -> {
@@ -82,6 +87,10 @@ private fun applyEvent(state: ChatState, event: RpcFrame.Event): ChatState {
 private fun cancelledStatus(reason: String?): CardStatus =
     if (reason == "timeout") CardStatus.Expired else CardStatus.Cancelled(reason ?: "cancelled")
 
+/** A turn that opens with tool calls leaves a streaming assistant item with no text; it must not outlive the turn. */
+private fun withoutEmptyStreaming(items: List<ChatItem>): List<ChatItem> =
+    items.filterNot { it is ChatItem.Assistant && it.streaming && it.markdown.isEmpty() }
+
 private fun appendDelta(state: ChatState, text: String): ChatState {
     val last = state.items.lastOrNull()
     val items = if (last is ChatItem.Assistant && last.streaming) {
@@ -94,8 +103,8 @@ private fun appendDelta(state: ChatState, text: String): ChatState {
 
 private fun completeMessage(state: ChatState, payload: JsonObject): ChatState {
     val text = payload["text"].string()
-    val index = state.items.indexOfLast { it is ChatItem.Assistant && it.streaming }
-    var items = state.items
+    var items = withoutEmptyStreaming(state.items)
+    val index = items.indexOfLast { it is ChatItem.Assistant && it.streaming }
     if (index >= 0) {
         val streaming = items[index] as ChatItem.Assistant
         items = items.toMutableList().also { it[index] = ChatItem.Assistant(text ?: streaming.markdown, streaming = false) }
