@@ -3,6 +3,9 @@
 
     <application
         android:name=".HermesApp"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:label="Hermes"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
         <activity
