@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Runs the hermes CLI inside the disposable e2e container.
+exec podman exec -i hermes-e2e hermes "$@"

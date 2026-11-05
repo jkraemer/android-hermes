@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Disposable Hermes Agent for end-to-end tests.
-#   hermes-e2e.sh up    clone/install (once), configure, start dashboard + gateway, write the env file
-#   hermes-e2e.sh down  stop both processes
+#   hermes-e2e.sh up    check out, build the image (once), configure, start the container, write the env file
+#   hermes-e2e.sh down  stop the container
 #   hermes-e2e.sh env   print the env file path
 # Model credentials come from E2E_PROVIDER, E2E_MODEL and E2E_API_KEY.
 set -euo pipefail
@@ -9,22 +9,16 @@ set -euo pipefail
 E2E_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STATE="$E2E_DIR/.state"
 SRC="$STATE/src"
-VENV="$STATE/venv"
 HOME_DIR="$STATE/home"
 ENV_FILE="$STATE/env"
 REPO_URL="https://github.com/NousResearch/hermes-agent"
 PORT=19119
 USERNAME=e2e
-PROCESSES=(dashboard gateway)
+CONTAINER=hermes-e2e
 
 die() { echo "hermes-e2e: $*" >&2; exit 1; }
 
-pid_file() { echo "$STATE/$1.pid"; }
-
-is_running() {
-  local file; file="$(pid_file "$1")"
-  [[ -f "$file" ]] && kill -0 "$(cat "$file")" 2>/dev/null
-}
+container_running() { [[ "$(podman inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" == true ]]; }
 
 # A random value generated on first use and kept, so repeated `up` runs agree.
 persistent_secret() {
@@ -38,21 +32,22 @@ checkout_source() {
   [[ -n "$ref" ]] || die "e2e/hermes-version is empty"
   if [[ "$(cat "$STATE/src-ref" 2>/dev/null || true)" == "$ref" ]]; then return; fi
   echo "checking out hermes-agent $ref"
-  rm -rf "$SRC" "$STATE/src-ref" "$STATE/venv-ref"
+  rm -rf "$SRC" "$STATE/src-ref"
   git init -q "$SRC"
   git -C "$SRC" fetch -q --depth 1 "$REPO_URL" "$ref"
   git -C "$SRC" -c advice.detachedHead=false checkout -q FETCH_HEAD
   echo "$ref" > "$STATE/src-ref"
 }
 
-install_source() {
-  [[ "$(cat "$STATE/venv-ref" 2>/dev/null || true)" == "$(cat "$STATE/src-ref")" ]] && return
-  echo "installing hermes-agent into $VENV"
-  # The upstream lock file is the resolution Hermes is tested with; a plain
-  # `uv pip install` of the same source fails on conflicting pins.
-  UV_PROJECT_ENVIRONMENT="$VENV" uv sync -q --project "$SRC" --frozen --extra web \
-    >> "$STATE/install.log" 2>&1 || die "install failed, see $STATE/install.log"
-  cp "$STATE/src-ref" "$STATE/venv-ref"
+build_image() {
+  podman image exists "$IMAGE" && return
+  echo "building $IMAGE (first build takes a while)"
+  # buildah rejects the symbolic `COPY --chmod=a+rX,go-w` the upstream Dockerfile uses
+  # (docker accepts it); apply the same permissions with a chmod step instead.
+  sed 's|^COPY --link --chmod=a+rX,go-w \. \.$|COPY . .\nRUN chmod -R a+rX,go-w /opt/hermes|' "$SRC/Dockerfile" > "$STATE/Dockerfile.podman"
+  grep -q '^RUN chmod -R a+rX,go-w /opt/hermes' "$STATE/Dockerfile.podman" || die "upstream Dockerfile changed; adapt build_image"
+  podman build -q -f "$STATE/Dockerfile.podman" -t "$IMAGE" "$SRC" >> "$STATE/build.log" 2>&1 \
+    || die "image build failed, see $STATE/build.log"
 }
 
 write_config() {
@@ -82,59 +77,58 @@ HERMES_URL=http://127.0.0.1:$PORT
 HERMES_USER=$USERNAME
 HERMES_PASSWORD=$(persistent_secret password)
 HERMES_HOME=$HOME_DIR
-HERMES_BIN=$VENV/bin/hermes
+HERMES_BIN=$E2E_DIR/hermes-cli
 ENV
   chmod 600 "$ENV_FILE"
 }
 
-start_process() {
-  local name="$1"; shift
-  if is_running "$name"; then echo "$name already running"; return; fi
-  # setsid gives each process its own group so `down` can stop its children too.
-  HERMES_HOME="$HOME_DIR" HERMES_YOLO_MODE= setsid "$VENV/bin/hermes" "$@" \
-    >> "$STATE/$name.log" 2>&1 < /dev/null &
-  echo $! > "$(pid_file "$name")"
+# One container runs the gateway (the image's main program) and, supervised by
+# s6, the dashboard. Hermes and everything the agent executes stay inside it; only
+# HERMES_HOME is shared with the host, at the same path so tests can inspect it.
+start_container() {
+  if container_running; then echo "$CONTAINER already running"; return; fi
+  # keep-id maps the host user to the image's own "hermes" user (uid/gid 10000), so files
+  # the agent writes to HERMES_HOME belong to the host user; --user root keeps the
+  # image's root bootstrap working.
+  # :Z relabels the home directory for SELinux, which would otherwise deny writes.
+  podman run -d --rm --name "$CONTAINER" \
+    --userns=keep-id:uid=10000,gid=10000 --user root \
+    -p "127.0.0.1:$PORT:$PORT" \
+    -v "$HOME_DIR:$HOME_DIR:Z" -e "HERMES_HOME=$HOME_DIR" \
+    -e HERMES_DASHBOARD=1 -e HERMES_DASHBOARD_HOST=0.0.0.0 -e "HERMES_DASHBOARD_PORT=$PORT" \
+    -e HERMES_YOLO_MODE= \
+    "$IMAGE" gateway run > /dev/null
 }
 
 wait_for_dashboard() {
   local url="http://127.0.0.1:$PORT/api/auth/providers"
-  for _ in $(seq 1 120); do
-    is_running dashboard || die "dashboard exited, see $STATE/dashboard.log"
+  for _ in $(seq 1 180); do
+    container_running || die "container exited, see: podman logs $CONTAINER"
     if curl -fsS -o /dev/null "$url" 2>/dev/null; then return; fi
     sleep 1
   done
-  die "dashboard did not answer $url within 120 s, see $STATE/dashboard.log"
+  die "dashboard did not answer $url within 180 s"
 }
 
 up() {
   : "${E2E_PROVIDER:?set E2E_PROVIDER (model provider id, e.g. openrouter)}"
   : "${E2E_MODEL:?set E2E_MODEL (model name)}"
   : "${E2E_API_KEY:?set E2E_API_KEY (API key for the provider)}"
-  command -v uv > /dev/null || die "uv is required"
+  command -v podman > /dev/null || die "podman is required"
   mkdir -p "$STATE"
   checkout_source
-  install_source
+  IMAGE="hermes-e2e:$(cat "$STATE/src-ref")"
+  build_image
   write_config
-  start_process dashboard dashboard --host 127.0.0.1 --port "$PORT" --no-open
-  start_process gateway gateway run
+  start_container
   wait_for_dashboard
   write_env_file
   echo "hermes e2e up; environment in $ENV_FILE"
 }
 
 down() {
-  local name file pid
-  for name in "${PROCESSES[@]}"; do
-    file="$(pid_file "$name")"
-    [[ -f "$file" ]] || continue
-    pid="$(cat "$file")"
-    if kill -0 "$pid" 2>/dev/null; then
-      kill -- "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
-      for _ in $(seq 1 30); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
-      if kill -0 "$pid" 2>/dev/null; then kill -9 -- "-$pid" 2>/dev/null || kill -9 "$pid" 2>/dev/null || true; fi
-    fi
-    rm -f "$file"
-  done
+  podman stop -t 20 "$CONTAINER" > /dev/null 2>&1 || true
+  podman rm -f "$CONTAINER" > /dev/null 2>&1 || true
   echo "hermes e2e down"
 }
 
