@@ -3,11 +3,14 @@ package net.jkraemer.hermes.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -39,7 +42,12 @@ class ChatViewModel(
     private val seenStore: SeenStore,
     private val clock: () -> Instant = Instant::now,
 ) : ViewModel() {
-    private val controller = ChatController(peer, viewModelScope, clock)
+    // Everything this chat runs hangs off one job so close() can stop it all, the open in flight included.
+    private val work = SupervisorJob(viewModelScope.coroutineContext[Job])
+    private val scope = viewModelScope + work
+    private val controller = ChatController(peer, scope, clock)
+
+    private val visible = MutableStateFlow(false)
 
     val chat: StateFlow<ChatState> = controller.state
     val connection: StateFlow<ConnectionState> = peer.state
@@ -55,15 +63,24 @@ class ChatViewModel(
     private var registeredId: String? = null
 
     init {
-        viewModelScope.launch { openWhenReady(storedSessionId) }
-        viewModelScope.launch { chat.collect(::onChatChanged) }
-        viewModelScope.launch {
-            chat.map { it.running }.distinctUntilChanged().collect { running ->
-                // A reply finished: the session has changed since it was last seen.
-                if (!running) markOpened()
-            }
+        scope.launch { openWhenReady(storedSessionId) }
+        scope.launch { chat.collect(::onChatChanged) }
+        scope.launch { markSeenWhileVisible() }
+        scope.launch { peer.events.collect { event -> if (event.type in TITLE_EVENTS) onTitleEvent(event.type, event.payload) } }
+    }
+
+    /**
+     * Marks the session seen when its chat opens, a reply completes, or the screen becomes visible
+     * again; not when a reply starts, and never while the screen is not visible.
+     */
+    private suspend fun markSeenWhileVisible() {
+        var previous: Triple<String?, Boolean, Boolean>? = null
+        combine(chat.map { it.storedSessionId }, visible, chat.map { it.running }, ::Triple).collect { current ->
+            val (id, isVisible, running) = current
+            val replyStarted = previous != null && previous!!.first == id && previous!!.second == isVisible && running
+            previous = current
+            if (id != null && isVisible && !replyStarted) seenStore.markOpened(id, clock())
         }
-        viewModelScope.launch { peer.events.collect { event -> if (event.type in TITLE_EVENTS) onTitleEvent(event.type, event.payload) } }
     }
 
     private suspend fun openWhenReady(storedSessionId: String?) {
@@ -83,13 +100,8 @@ class ChatViewModel(
         if (id != registeredId) {
             registeredId?.let { old -> needsAnswer.update { it - old } }
             registeredId = id
-            if (id != null) seenStore.markOpened(id, clock())
         }
         id?.let { stored -> needsAnswer.update { if (needsAnswerNow) it + stored else it - stored } }
-    }
-
-    private fun markOpened() {
-        chat.value.storedSessionId?.let { seenStore.markOpened(it, clock()) }
     }
 
     /** `session.title` names the session by its stored id; `session.info` carries it as `title` next to `stored_session_id`. */
@@ -110,12 +122,17 @@ class ChatViewModel(
 
     fun interrupt() = launchGuarded("Couldn't stop") { controller.interrupt() }
 
+    /** Whether the user can see the chat; replies completing out of sight are marked seen once it is. */
+    fun setVisible(visible: Boolean) {
+        this.visible.value = visible
+    }
+
     fun messageShown() {
         _message.value = null
     }
 
     private fun launchGuarded(failure: String, block: suspend () -> Unit) {
-        viewModelScope.launch { guarded(failure, block) }
+        scope.launch { guarded(failure, block) }
     }
 
     // The controller reports its failures by throwing; none of them may take the app down.
@@ -131,6 +148,7 @@ class ChatViewModel(
 
     /** Stops the controller and takes the chat out of [needsAnswer]; safe to call again. */
     fun close() {
+        work.cancel()
         registeredId?.let { id -> needsAnswer.update { it - id } }
         registeredId = null
         controller.close()

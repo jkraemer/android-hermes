@@ -35,40 +35,6 @@ import java.util.concurrent.CopyOnWriteArrayList
 
 private val NOW = Instant.parse("2026-11-05T12:00:00Z")
 
-private fun obj(json: String) = Json.parseToJsonElement(json) as JsonObject
-
-/** A Hermes connection with scripted answers; events and server requests are pushed by the test. */
-private class FakePeer : RpcPeer {
-    override val state = MutableStateFlow<ConnectionState>(ConnectionState.Ready)
-    override val events = MutableSharedFlow<RpcFrame.Event>(extraBufferCapacity = 64)
-    override val serverRequests = MutableSharedFlow<RpcFrame.ServerRequest>(extraBufferCapacity = 64)
-
-    val calls = CopyOnWriteArrayList<Pair<String, JsonObject>>()
-    val answers = CopyOnWriteArrayList<Pair<String, JsonObject>>()
-    var failing = emptySet<String>()
-    var resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":false,"open_requests":[]}"""
-
-    override suspend fun call(method: String, params: JsonObject, timeoutMs: Long): JsonElement {
-        calls += method to params
-        if (method in failing) throw java.io.IOException("socket closed")
-        return Json.parseToJsonElement(
-            when (method) {
-                "session.resume", "session.create" -> resume
-                "session.events.since" -> """{"events":[],"latest_seq":0,"truncated":false,"epoch":"e1","open_requests":[]}"""
-                else -> "{}"
-            },
-        )
-    }
-
-    override suspend fun answer(requestId: String, result: JsonObject) {
-        answers += requestId to result
-    }
-
-    fun event(type: String, payload: String = "{}") {
-        events.tryEmit(RpcFrame.Event(type, "live1", null, obj(payload)))
-    }
-}
-
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ChatScreenTest {
@@ -181,13 +147,13 @@ class ChatScreenTest {
         show()
         waitForText("Colour?")
 
-        compose.onNodeWithText("Send answers").assertIsNotEnabled()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
         compose.onNodeWithText("red").performClick()
-        compose.onNodeWithText("Send answers").assertIsNotEnabled()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
         compose.onNodeWithText("a").performClick()
-        compose.onNodeWithText("Send answers").assertIsEnabled()
+        compose.onNodeWithText("Send").assertIsEnabled()
 
-        compose.onNodeWithText("Send answers").performClick()
+        compose.onNodeWithText("Send").performClick()
         compose.waitUntil(10_000) { peer.answers.isNotEmpty() }
         assertEquals("srq-2", peer.answers.single().first)
     }
@@ -201,9 +167,9 @@ class ChatScreenTest {
         waitForText("Colour?")
 
         compose.onNodeWithText("Other…").performClick()
-        compose.onNodeWithText("Send answers").assertIsNotEnabled()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
         compose.onNodeWithTag("other-q1").performTextInput("green")
-        compose.onNodeWithText("Send answers").assertIsEnabled()
+        compose.onNodeWithText("Send").assertIsEnabled()
     }
 
     @Test

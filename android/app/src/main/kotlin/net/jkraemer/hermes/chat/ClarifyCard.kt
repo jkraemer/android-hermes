@@ -69,7 +69,7 @@ fun ClarifyCard(item: ChatItem.Clarify, onSend: (Map<String, List<String>>) -> U
                 Button(
                     onClick = { onSend(answers.mapValues { it.value.values() }) },
                     enabled = answers.values.all { it.values().isNotEmpty() },
-                ) { Text("Send answers") }
+                ) { Text("Send") }
             }
         }
     }

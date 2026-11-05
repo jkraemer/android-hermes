@@ -50,7 +50,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.currentStateAsState
 import com.mikepenz.markdown.m3.Markdown
 import net.jkraemer.hermes.core.chat.ChatItem
 import net.jkraemer.hermes.core.chat.ToolCall
@@ -74,6 +77,8 @@ fun ChatScreen(
     val snackbar = remember { SnackbarHostState() }
     val ready = connection == ConnectionState.Ready
 
+    val started by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
+    LaunchedEffect(started.isAtLeast(Lifecycle.State.STARTED)) { viewModel.setVisible(started.isAtLeast(Lifecycle.State.STARTED)) }
     LaunchedEffect(chat.storedSessionId) { chat.storedSessionId?.let(onStoredSessionId) }
     LaunchedEffect(message) {
         message?.let {
