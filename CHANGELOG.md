@@ -4,6 +4,10 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+### Changed
+
+- The scroll-to-end button scrolls quickly to the end instead of jumping there.
+
 ## [0.1.1] - 2026-11-06
 
 ### Fixed

@@ -1,22 +1,27 @@
 package net.jkraemer.hermes.chat
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
@@ -28,8 +33,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -179,14 +182,18 @@ private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatVi
     val listState = rememberLazyListState()
     val parsedReplies by viewModel.parsedReplies.collectAsStateWithLifecycle()
     val following = remember { mutableStateOf(true) }
-    FollowTheEnd(listState, following)
+    val glide = remember { mutableStateOf(false) }
+    FollowTheEnd(listState, following, glide)
     val awayFromTheEnd by remember { derivedStateOf { !following.value && listState.canScrollForward } }
     val jobPromptIndex = if (cron) chatItems.indexOfFirst { it is ChatItem.User } else -1
     Box(modifier.fillMaxWidth()) {
         MessageList(chatItems, jobPromptIndex, parsedReplies, viewModel, clock, listState, composerHeight)
         ScrollToEndButton(
             awayFromTheEnd,
-            onClick = { following.value = true },
+            onClick = {
+                glide.value = true
+                following.value = true
+            },
             Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight),
         )
     }
@@ -258,15 +265,49 @@ private fun Reply(reply: ChatItem.Assistant, parsed: State.Success?) {
  * laid out a few frames after it arrives. Scrolling away from the end stops following; scrolling back resumes it.
  */
 @Composable
-private fun FollowTheEnd(listState: LazyListState, following: MutableState<Boolean>) {
+private fun FollowTheEnd(listState: LazyListState, following: MutableState<Boolean>, glide: MutableState<Boolean>) {
     LaunchedEffect(listState) {
         // Scrolling to the end happens in here, so this never sees its own scrolls in progress, only the user's.
         snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward, following.value) }.collect { (scrolling, canScrollForward, follow) ->
             if (scrolling) following.value = !canScrollForward
-            else if (follow && canScrollForward) scrollToEnd(listState)
+            else if (follow && canScrollForward) {
+                if (glide.value) {
+                    glide.value = false
+                    glideToEnd(listState)
+                } else {
+                    scrollToEnd(listState)
+                }
+            }
         }
     }
 }
+
+/**
+ * How the scroll-to-end button gets there: a fast, visible scroll rather than a jump. However far away the end is,
+ * the list first snaps to one screen above it, so the glide always covers at most one screen.
+ */
+private suspend fun glideToEnd(listState: LazyListState) {
+    val layout = listState.layoutInfo
+    val last = layout.totalItemsCount - 1
+    if (last < 0) return
+    try {
+        val lastShown = layout.visibleItemsInfo.lastOrNull()
+        val distance = if (lastShown?.index == last) {
+            (lastShown.offset + lastShown.size + layout.afterContentPadding - layout.viewportEndOffset).toFloat()
+        } else {
+            listState.scrollToItem(last)
+            listState.scrollBy(Float.MAX_VALUE)
+            -listState.scrollBy(-(layout.viewportEndOffset - layout.viewportStartOffset).toFloat())
+        }
+        listState.animateScrollBy(distance, tween(GLIDE_MILLIS, easing = FastOutSlowInEasing))
+        listState.scrollBy(Float.MAX_VALUE)
+    } catch (e: CancellationException) {
+        // A drag that starts meanwhile takes the list over; the drag then decides whether it still follows.
+        currentCoroutineContext().ensureActive()
+    }
+}
+
+private const val GLIDE_MILLIS = 300
 
 private suspend fun scrollToEnd(listState: LazyListState) {
     val last = listState.layoutInfo.totalItemsCount - 1

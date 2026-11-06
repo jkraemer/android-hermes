@@ -723,4 +723,29 @@ class ChatScreenTest {
         compose.waitForIdle()
         compose.onNode(hasText("Reply 7 paragraph 30 says", substring = true)).assertIsDisplayed()
     }
+
+    @Test
+    fun scrollToEndScrollsVisiblyRatherThanJumping() {
+        showLongChat(6)
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown(durationMillis = 100) }
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown(durationMillis = 100) }
+        compose.waitForIdle()
+        val endText = hasText("Reply 6 paragraph 6 says", substring = true)
+        compose.onNode(endText).assertDoesNotExist()
+
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithContentDescription("Scroll to end").performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeByFrame()
+        // Two frames in, the list is on its way: the end is not reached in one jump.
+        val midway = compose.onAllNodes(endText).fetchSemanticsNodes().firstOrNull()?.positionInRoot?.y
+        val pill = compose.onNodeWithTag("composer-box").bounds()
+        assertTrue("still moving after two frames (end text at $midway, composer top ${pill.top})", midway == null || midway > pill.top)
+
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        compose.onNode(endText).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Scroll to end").assertDoesNotExist()
+    }
 }
