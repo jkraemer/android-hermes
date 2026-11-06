@@ -10,8 +10,10 @@ android {
         applicationId = "net.jkraemer.hermes"
         minSdk = 35
         targetSdk = 36
-        versionCode = 1
-        versionName = "dev"
+        // CI passes these from the release tag (-PversionName) and the commit
+        // count (-PversionCode); local builds fall back to dev values.
+        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
+        versionName = (project.findProperty("versionName") as String?) ?: "dev"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

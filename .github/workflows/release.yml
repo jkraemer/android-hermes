@@ -1,0 +1,67 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # full history: versionCode is the commit count
+
+      - name: Extract release notes from changelog
+        working-directory: .
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v ver="$VERSION" \
+             '$0 ~ "^## \\[" ver "\\]" {flag=1; next} /^## /{flag=0} flag' \
+             CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "CHANGELOG.md has no section for $VERSION — rename [Unreleased] before tagging" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Run tests
+        run: ./gradlew test
+
+      - name: Decode keystore
+        env:
+          KEYSTORE_B64: ${{ secrets.RELEASE_KEYSTORE_B64 }}
+        run: echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+
+      - name: Build signed release APK
+        env:
+          RELEASE_KEYSTORE: ${{ runner.temp }}/release.keystore
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: >
+          ./gradlew assembleRelease
+          -PversionName="${GITHUB_REF_NAME#v}"
+          -PversionCode="$(git rev-list --count HEAD)"
+
+      - name: Create GitHub release with APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp app/build/outputs/apk/release/app-release.apk \
+             "android-hermes-${GITHUB_REF_NAME}.apk"
+          gh release create "$GITHUB_REF_NAME" \
+             "android-hermes-${GITHUB_REF_NAME}.apk" \
+             --title "$GITHUB_REF_NAME" --notes-file ../notes.md
