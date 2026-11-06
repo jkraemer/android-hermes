@@ -101,6 +101,8 @@ class ChatScreenTest {
         peer.resume = longTranscript(pairs)
         show()
         compose.waitUntil(10_000) { viewModel.chat.value.items.size == 2 * pairs }
+        // The replies are parsed on Dispatchers.Default, which waitForIdle does not wait for.
+        compose.waitUntil(10_000) { viewModel.parsedReplies.value.size == pairs }
         compose.waitForIdle()
     }
 
