@@ -81,7 +81,8 @@ private fun JSONObject.toScreen(): Screen = when (getString("screen")) {
 /** Keeps the screen across rotation and process death, which a plain `remember` would not. */
 internal val ScreenSaver = Saver<Screen?, String>(
     save = { it?.toJson()?.toString() ?: "" },
-    restore = { if (it.isEmpty()) null else JSONObject(it).toScreen() },
+    // State saved by another version, or damaged, is not worth a crash: the app starts afresh.
+    restore = { runCatching { if (it.isEmpty()) null else JSONObject(it).toScreen() }.getOrNull() },
 )
 
 @Composable
@@ -146,6 +147,9 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     // from; with neither it leaves the app.
     BackHandler(current is Screen.Chat && current.fromList != null) { show((current as Screen.Chat).fromList!!) }
     BackHandler(current is Screen.Sessions && current.back != null) { show((current as Screen.Sessions).back!!) }
+    BackHandler(current is Screen.Sessions && sessionState.searchOpen, sessionList::closeSearch)
+    // The open drawer is on top of everything, so back closes it first; the last handler registered wins.
+    BackHandler(drawerState.isOpen) { scope.launch { drawerState.close() } }
 
     fun closeDrawer() = scope.launch { drawerState.close() }
 

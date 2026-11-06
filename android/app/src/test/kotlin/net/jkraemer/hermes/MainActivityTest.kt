@@ -404,4 +404,55 @@ class MainActivityTest {
         assertEquals(Screen.Login, restore(Screen.Login))
         assertEquals(null, restore(null))
     }
+
+    @Test
+    fun unreachableServerWithoutCookieShowsLoginScreen() {
+        serverAnswering(me = 200)
+        server.shutdown()
+        ActivityScenario.launch(MainActivity::class.java).use { awaitTag("login-screen") }
+    }
+
+    @Test
+    fun lostSessionOnTheConnectionShowsLoginScreen() {
+        serverAnswering(me = 200, wsTicket = 401)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { awaitTag("login-screen") }
+    }
+
+    @Test
+    fun savedStateInAFormatThatIsNotTheCurrentOneRestoresToNothing() {
+        val old = listOf(
+            "login", "sessions", "chat", "chat:id-1",
+            listOf("chat", "key", "false", "id", "title").joinToString("\u001f"),
+            "{", "{\"screen\":\"other\"}", "{\"screen\":\"chat\"}", "{\"screen\":\"sessions\",\"back\":{\"screen\":\"login\"}}",
+            "[]", "null", "\u0000",
+        )
+        for (saved in old) assertEquals(saved, null, ScreenSaver.restore(saved))
+    }
+
+    @Test
+    fun backClosesTheDrawerBeforeSearch() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            openDrawer()
+            await(hasContentDescription("Search") and hasClickAction())
+            compose.onAllNodes(hasContentDescription("Search") and hasClickAction())[0].performClick()
+            awaitTag("search")
+            openDrawer()
+            compose.waitUntil(10_000) { compose.onAllNodes(hasText("View all")).fetchSemanticsNodes().isNotEmpty() }
+            compose.waitForIdle()
+            compose.onNodeWithText("View all").assertIsDisplayed()
+
+            pressBack(scenario)
+            compose.waitForIdle()
+
+            // The drawer closed; search is still open.
+            assertEquals(1, compose.onAllNodes(hasTestTag("search")).fetchSemanticsNodes().size)
+            pressBack(scenario)
+            compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("search")).fetchSemanticsNodes().isEmpty() }
+            awaitTag("sessions-screen")
+        }
+    }
 }
