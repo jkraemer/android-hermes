@@ -58,6 +58,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.currentStateAsState
 import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.model.State
 import net.jkraemer.hermes.core.chat.ChatItem
 import net.jkraemer.hermes.core.chat.ToolCall
 import net.jkraemer.hermes.core.rpc.ConnectionState
@@ -147,6 +148,7 @@ private fun OpenFailedBanner(onRetry: () -> Unit) {
 @Composable
 private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatViewModel, clock: () -> Instant, modifier: Modifier) {
     val listState = rememberLazyListState()
+    val parsedReplies by viewModel.parsedReplies.collectAsStateWithLifecycle()
     FollowTheEnd(listState, chatItems)
     val jobPromptIndex = if (cron) chatItems.indexOfFirst { it is ChatItem.User } else -1
     LazyColumn(
@@ -155,10 +157,11 @@ private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatVi
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = spacedBy(16.dp),
     ) {
-        items(chatItems.size) { index ->
+        // Items are only ever appended to a chat, so an item keeps its index.
+        items(chatItems.size, key = { it }, contentType = { chatItems[it]::class }) { index ->
             when (val item = chatItems[index]) {
                 is ChatItem.User -> if (index == jobPromptIndex) JobPrompt(item.text) else UserBubble(item.text)
-                is ChatItem.Assistant -> Markdown(item.markdown, modifier = Modifier.fillMaxWidth())
+                is ChatItem.Assistant -> Reply(item, parsedReplies[item.markdown])
                 is ChatItem.Tools -> ToolLine(item.calls)
                 is ChatItem.Approval -> ApprovalCard(item, clock, onChoose = { viewModel.answerApproval(item.requestId, it) })
                 is ChatItem.Clarify -> ClarifyCard(item, onSend = { viewModel.answerClarify(item.requestId, it) })
@@ -166,6 +169,19 @@ private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatVi
             }
         }
     }
+}
+
+/**
+ * A finished reply renders from its [parsed] Markdown, so it is laid out at its full height in the first frame it
+ * is shown. Any other reply, streaming or finished before its parse is ready, is parsed by the renderer; one call
+ * serves both, so a reply that has just finished streaming stays as it was, and while the renderer parses it shows
+ * the plain text rather than nothing.
+ */
+@Composable
+private fun Reply(reply: ChatItem.Assistant, parsed: State.Success?) {
+    val modifier = Modifier.fillMaxWidth()
+    if (parsed != null) Markdown(parsed, modifier = modifier)
+    else Markdown(reply.markdown, modifier = modifier, loading = { Text(reply.markdown, it, style = MaterialTheme.typography.bodyLarge) })
 }
 
 /** Keeps the newest content in view while it grows, until the user scrolls away from the end; scrolling back to the end resumes it. */

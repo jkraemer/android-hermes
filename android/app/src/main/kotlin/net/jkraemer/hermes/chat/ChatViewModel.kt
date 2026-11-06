@@ -2,6 +2,8 @@ package net.jkraemer.hermes.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdownFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -11,6 +13,7 @@ import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -65,6 +68,16 @@ class ChatViewModel(
     private val _openFailed = MutableStateFlow(false)
     val openFailed: StateFlow<Boolean> = _openFailed.asStateFlow()
 
+    /**
+     * Each finished reply's parsed Markdown, by its text: parsed once, off the main thread, and kept for the
+     * life of the chat, so a reply that scrolls back into view is laid out at its full height straight away.
+     */
+    private val _parsedReplies = MutableStateFlow<Map<String, State.Success>>(emptyMap())
+    val parsedReplies: StateFlow<Map<String, State.Success>> = _parsedReplies.asStateFlow()
+
+    /** The replies whose parse has been started. */
+    private val parsing = mutableSetOf<String>()
+
     private var opened = false
 
     /** The stored id this chat has needsAnswer registered under. */
@@ -73,6 +86,7 @@ class ChatViewModel(
     init {
         scope.launch { openWhenReady() }
         scope.launch { chat.collect(::onChatChanged) }
+        scope.launch { chat.collect { parseFinishedReplies(it.items) } }
         scope.launch { markSeenWhileVisible() }
         scope.launch { peer.events.collect { event -> if (event.type in TITLE_EVENTS) onTitleEvent(event.type, event.payload) } }
     }
@@ -118,6 +132,17 @@ class ChatViewModel(
             registeredId = id
         }
         id?.let { stored -> needsAnswer.update { if (needsAnswerNow) it + stored else it - stored } }
+    }
+
+    /** A streaming reply changes with every delta, so only finished ones are parsed. */
+    private fun parseFinishedReplies(items: List<ChatItem>) {
+        for (item in items) {
+            if (item !is ChatItem.Assistant || item.streaming || !parsing.add(item.markdown)) continue
+            scope.launch {
+                val parsed = parseMarkdownFlow(item.markdown).first { it !is State.Loading }
+                if (parsed is State.Success) _parsedReplies.update { it + (item.markdown to parsed) }
+            }
+        }
     }
 
     /** `session.title` names the session by its stored id; `session.info` carries it as `title` next to `stored_session_id`. */

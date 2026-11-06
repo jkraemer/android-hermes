@@ -9,6 +9,7 @@ import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.settings.SeenStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -47,6 +48,15 @@ class ChatViewModelTest {
             Thread.sleep(20)
         }
         shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    /** Settles until [done], for work that also runs off the main looper. */
+    private fun settleUntil(done: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!done()) {
+            check(System.currentTimeMillis() < deadline) { "timed out" }
+            settle()
+        }
     }
 
     @Test
@@ -118,5 +128,35 @@ class ChatViewModelTest {
         settle()
 
         assertEquals(Instant.EPOCH, seenStore.lastOpened()["stored1"])
+    }
+
+    @Test
+    fun finishedRepliesAreParsedOnceAndKeptForTheChat() {
+        peer.resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[
+            {"role":"user","text":"hi"},{"role":"assistant","text":"# Hello\n\nThere."}],"running":false,"open_requests":[]}"""
+        val chat = viewModel()
+        settleUntil { chat.parsedReplies.value.isNotEmpty() }
+        val parsed = chat.parsedReplies.value.getValue("# Hello\n\nThere.")
+        assertEquals("# Hello\n\nThere.", parsed.content)
+
+        peer.event("message.delta", """{"text":"More"}""")
+        settle()
+
+        assertSame(parsed, chat.parsedReplies.value["# Hello\n\nThere."])
+    }
+
+    @Test
+    fun aStreamingReplyIsParsedOnlyOnceItIsFinished() {
+        peer.resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":true,"open_requests":[]}"""
+        val chat = viewModel()
+        settle()
+        peer.event("message.delta", """{"text":"Hel"}""")
+        settle()
+        assertTrue(chat.parsedReplies.value.isEmpty())
+
+        peer.event("message.complete", """{"text":"Hello"}""")
+        settleUntil { chat.parsedReplies.value.isNotEmpty() }
+
+        assertEquals(setOf("Hello"), chat.parsedReplies.value.keys)
     }
 }

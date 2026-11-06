@@ -2,23 +2,30 @@ package net.jkraemer.hermes.chat
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToIndex
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import net.jkraemer.hermes.core.chat.RpcPeer
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.core.rpc.RpcFrame
@@ -76,6 +83,95 @@ class ChatScreenTest {
     private val promptTranscript = """{"session_id":"live1","stored_session_id":"stored1","messages":[
         {"role":"user","text":"/attention-check"},{"role":"assistant","text":"All quiet."},{"role":"user","text":"thanks"}
         ],"running":false,"open_requests":[]}"""
+
+    private fun reply(n: Int) = (1..6).joinToString("\n\n") { "Reply $n paragraph $it says something **useful** about the question, long enough to wrap over several lines on a phone screen." }
+
+    /** [pairs] questions, each answered by a finished reply of several paragraphs. */
+    private fun longTranscript(pairs: Int): String {
+        val messages = buildJsonArray {
+            for (n in 1..pairs) {
+                add(buildJsonObject { put("role", "user"); put("text", "Question $n") })
+                add(buildJsonObject { put("role", "assistant"); put("text", reply(n)) })
+            }
+        }
+        return """{"session_id":"live1","stored_session_id":"stored1","messages":$messages,"running":false,"open_requests":[]}"""
+    }
+
+    private fun showLongChat(pairs: Int) {
+        peer.resume = longTranscript(pairs)
+        show()
+        compose.waitUntil(10_000) { viewModel.chat.value.items.size == 2 * pairs }
+        compose.waitForIdle()
+    }
+
+    private fun present(text: String) = compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().isNotEmpty()
+
+    /** The top of each question bubble laid out now, by the question's number. */
+    private fun questionTops(pairs: Int) = (1..pairs).mapNotNull { n ->
+        compose.onAllNodesWithText("Question $n").fetchSemanticsNodes().firstOrNull()?.let { n to it.positionInRoot.y }
+    }.toMap()
+
+    @Test
+    fun aLongChatOpensAtItsEnd() {
+        showLongChat(6)
+
+        compose.onNode(hasText("Reply 6 paragraph 6", substring = true)).assertIsDisplayed()
+    }
+
+    @Test
+    fun aFinishedReplyHasItsTextInTheFrameItIsScrolledTo() {
+        showLongChat(6)
+        compose.mainClock.autoAdvance = false
+
+        compose.onNodeWithTag("messages").performScrollToIndex(3)
+
+        assertTrue("reply 2 is laid out with its text, not empty", present("Reply 2 paragraph 1"))
+    }
+
+    @Test
+    fun draggingUpMovesTheChatWithTheFingerWhileEarlierRepliesComeIntoView() {
+        val pairs = 8
+        showLongChat(pairs)
+        compose.onNodeWithTag("messages").performScrollToIndex(2 * pairs - 1)
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        val step = 40f
+        // The first move also takes up the touch slop, so it moves the chat by less than a step.
+        compose.onNodeWithTag("messages").performTouchInput { down(center); moveBy(Offset(0f, step)) }
+        compose.mainClock.advanceTimeByFrame()
+        val repliesAtStart = (1..pairs).filter { present("Reply $it paragraph") }
+
+        var before = questionTops(pairs)
+        repeat(20) { frame ->
+            compose.onNodeWithTag("messages").performTouchInput { moveBy(Offset(0f, step)) }
+            compose.mainClock.advanceTimeByFrame()
+            val after = questionTops(pairs)
+            for (n in before.keys intersect after.keys) {
+                assertEquals("Question $n moves with the finger in frame $frame", before.getValue(n) + step, after.getValue(n), 0.5f)
+            }
+            before = after
+        }
+        compose.onNodeWithTag("messages").performTouchInput { up() }
+        assertTrue("an earlier reply came into view from the top", (1..pairs).any { it !in repliesAtStart && present("Reply $it paragraph") })
+    }
+
+    @Test
+    fun aReplyStaysRenderedAsItFinishesStreaming() {
+        peer.resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":true,"open_requests":[]}"""
+        show()
+        compose.waitUntil(10_000) { peer.calls.any { it.first == "session.events.since" } }
+        val text = buildJsonObject { put("text", "Some **bold** words.\n\nA second paragraph.") }.toString()
+        peer.event("message.delta", text)
+        compose.waitUntil(10_000) { present("Some bold words.") }
+        compose.mainClock.autoAdvance = false
+
+        peer.event("message.complete", text)
+
+        repeat(3) { frame ->
+            compose.mainClock.advanceTimeByFrame()
+            assertTrue("frame $frame shows the reply as Markdown", present("Some bold words.") && !present("**"))
+        }
+    }
 
     @Test
     fun cronChatCollapsesTheJobPromptAndExpandsItOnTap() {
