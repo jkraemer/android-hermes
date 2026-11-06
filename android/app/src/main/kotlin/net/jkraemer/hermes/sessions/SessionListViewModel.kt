@@ -17,7 +17,9 @@ import net.jkraemer.hermes.core.sessions.SearchHit
 import net.jkraemer.hermes.core.sessions.SessionPage
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.SessionsApi
+import net.jkraemer.hermes.core.timeline.DrawerEntries
 import net.jkraemer.hermes.core.timeline.TimelineItem
+import net.jkraemer.hermes.core.timeline.buildDrawerEntries
 import net.jkraemer.hermes.core.timeline.buildTimeline
 import net.jkraemer.hermes.settings.SeenStore
 import java.io.IOException
@@ -42,6 +44,11 @@ enum class SessionListError { UNREACHABLE, FAILED }
 
 data class SessionListState(
     val items: List<TimelineItem> = emptyList(),
+    /** What the drawer lists; built from the same sessions as [items]. */
+    val drawer: DrawerEntries = DrawerEntries(emptyList(), emptyList()),
+    /** The hits of the current query; null while it is blank. They replace [items] on screen. */
+    val results: List<SearchHit>? = null,
+    val searchOpen: Boolean = false,
     val refreshing: Boolean = false,
     val query: String = "",
     val error: SessionListError? = null,
@@ -55,6 +62,7 @@ private data class Loaded(
     val searchResults: List<SearchHit>? = null,
     val refreshing: Boolean = false,
     val query: String = "",
+    val searchOpen: Boolean = false,
     val error: SessionListError? = null,
     val needsLogin: Boolean = false,
 )
@@ -74,11 +82,17 @@ class SessionListViewModel(
     private var searchJob: Job? = null
 
     val state: StateFlow<SessionListState> = combine(loaded, needsAnswer) { loaded, needsAnswer ->
-        val items = loaded.searchResults?.map { TimelineItem.Row(it.session, unread = false, needsAnswer = it.session.id in needsAnswer) }
-            ?: buildTimeline(
-                loaded.sessions, clock.instant(), clock.zone, seen.lastOpened(), seen.baseline, needsAnswer,
-            )
-        SessionListState(items, loaded.refreshing, loaded.query, loaded.error, loaded.needsLogin)
+        val lastOpened = seen.lastOpened()
+        SessionListState(
+            items = buildTimeline(loaded.sessions, clock.instant(), clock.zone, lastOpened, seen.baseline, needsAnswer),
+            drawer = buildDrawerEntries(loaded.sessions, lastOpened, seen.baseline, needsAnswer),
+            results = loaded.searchResults,
+            searchOpen = loaded.searchOpen,
+            refreshing = loaded.refreshing,
+            query = loaded.query,
+            error = loaded.error,
+            needsLogin = loaded.needsLogin,
+        )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, SessionListState())
 
     /** Reloads the first page, and the search results if there is a query. */
@@ -109,6 +123,14 @@ class SessionListViewModel(
             delay(SEARCH_DEBOUNCE_MS)
             runSearch(query)
         }
+    }
+
+    fun openSearch() = loaded.update { it.copy(searchOpen = true) }
+
+    /** Closing search drops the query, so the timeline is back. */
+    fun closeSearch() {
+        searchJob?.cancel()
+        loaded.update { it.copy(searchOpen = false, query = "", searchResults = null) }
     }
 
     fun rename(id: String, title: String) = change { source.update(id, title, null, null) }

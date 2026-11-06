@@ -8,8 +8,16 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
 import net.jkraemer.hermes.chat.ChatScreen
 import net.jkraemer.hermes.chat.ChatViewModel
-import java.util.UUID
-import androidx.compose.material3.MaterialTheme
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.launch
+import net.jkraemer.hermes.sessions.SessionsDrawerContent
+import net.jkraemer.hermes.ui.HermesTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,8 +40,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The system bar icons follow the system's light or dark setting, like the theme does.
+        enableEdgeToEdge()
         setContent {
-            MaterialTheme {
+            HermesTheme {
                 Surface { HermesRoot(graph) }
             }
         }
@@ -46,33 +56,36 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private const val CHAT_KEY = "chat"
+private const val FIELD_SEPARATOR = "\u001f"
 
 /** Keeps the screen across rotation and process death, which a plain `remember` would not. */
-private val ScreenSaver = Saver<Screen?, String>(
+internal val ScreenSaver = Saver<Screen?, String>(
     save = {
         when (it) {
             null -> ""
             Screen.Login -> "login"
             Screen.Sessions -> "sessions"
-            is Screen.Chat -> it.storedSessionId?.let { id -> "$CHAT_KEY:$id" } ?: CHAT_KEY
+            is Screen.Chat -> listOf("chat", it.key, it.fromList, it.storedSessionId.orEmpty(), it.title.orEmpty())
+                .joinToString(FIELD_SEPARATOR)
         }
     },
     restore = {
-        when {
-            it.isEmpty() -> null
-            it == "login" -> Screen.Login
-            it == "sessions" -> Screen.Sessions
-            it == CHAT_KEY -> Screen.Chat(null)
-            else -> Screen.Chat(it.removePrefix("$CHAT_KEY:"))
+        when (it) {
+            "" -> null
+            "login" -> Screen.Login
+            "sessions" -> Screen.Sessions
+            else -> {
+                val (_, key, fromList, id, title) = it.split(FIELD_SEPARATOR, limit = 5)
+                Screen.Chat(id.ifEmpty { null }, title.ifEmpty { null }, fromList.toBoolean(), key)
+            }
         }
     },
 )
 
 @Composable
 private fun HermesRoot(graph: AppGraph) {
-    val activity = LocalContext.current as ComponentActivity
     var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen?>(null) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         if (screen == null) screen = graph.startScreen()
@@ -84,9 +97,8 @@ private fun HermesRoot(graph: AppGraph) {
             if (it is ConnectionState.Failed && it.needsLogin) screen = Screen.Login
         }
     }
-    BackHandler(screen is Screen.Chat) { screen = Screen.Sessions }
 
-    when (screen) {
+    when (val current = screen) {
         null -> Unit
         Screen.Login -> {
             val login = viewModel {
@@ -97,39 +109,86 @@ private fun HermesRoot(graph: AppGraph) {
                 }
             }
             LoginScreen(login, onLoggedIn = {
-                screen = Screen.Sessions
-                graph.reconnect()
+                scope.launch {
+                    screen = graph.openingScreen()
+                    graph.reconnect()
+                }
             })
         }
-        Screen.Sessions -> {
-            val sessionList = viewModel {
-                SessionListViewModel(SessionsApiSource { graph.sessions }, graph.needsAnswer, graph.seenStore)
+        Screen.Sessions, is Screen.Chat -> SessionsAndChat(graph, current) { screen = it }
+    }
+}
+
+/** The session list and the chat, which share the navigation drawer and the list's sessions. */
+@Composable
+private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> Unit) {
+    val activity = LocalContext.current as ComponentActivity
+    val sessionList = viewModel {
+        SessionListViewModel(SessionsApiSource { graph.sessions }, graph.needsAnswer, graph.seenStore)
+    }
+    val sessionState by sessionList.state.collectAsStateWithLifecycle()
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    // The drawer shows what changed since it was last open.
+    LaunchedEffect(drawerState.isOpen) { if (drawerState.isOpen) sessionList.refresh() }
+
+    // A chat opened from the list goes back to it; from anywhere else back leaves the app.
+    BackHandler(current is Screen.Chat && current.fromList) { show(Screen.Sessions) }
+
+    fun closeDrawer() = scope.launch { drawerState.close() }
+    fun openChat(id: String?, title: String?) {
+        sessionList.closeSearch()
+        show(Screen.Chat(id, title, fromList = current is Screen.Sessions))
+        closeDrawer()
+    }
+
+    ModalNavigationDrawer(
+        drawerContent = {
+            ModalDrawerSheet {
+                SessionsDrawerContent(
+                    sessionState.drawer,
+                    onSearch = {
+                        sessionList.openSearch()
+                        show(Screen.Sessions)
+                        closeDrawer()
+                    },
+                    onNewChat = { openChat(null, null) },
+                    onOpenChat = ::openChat,
+                    onViewAll = {
+                        show(Screen.Sessions)
+                        closeDrawer()
+                    },
+                )
             }
-            SessionListScreen(
+        },
+        drawerState = drawerState,
+    ) {
+        when (current) {
+            Screen.Sessions -> SessionListScreen(
                 sessionList,
                 host = graph.serverUrl?.host.orEmpty(),
-                onOpenChat = { id, title -> screen = Screen.Chat(id, title) },
-                onNotLoggedIn = { screen = Screen.Login },
+                onOpenMenu = { scope.launch { drawerState.open() } },
+                onOpenChat = ::openChat,
+                onNotLoggedIn = { show(Screen.Login) },
                 onRetryConnect = graph::reconnect,
             )
-        }
-        is Screen.Chat -> {
-            val current = screen as Screen.Chat
-            // A fresh key per opening: a chat reopened later must get a new controller. It is saved
-            // so a rotation keeps the chat, and it does not change when a new chat learns its id.
-            val chatKey = rememberSaveable { UUID.randomUUID().toString() }
-            val chat = viewModel(key = chatKey) {
-                ChatViewModel(graph.rpc, current.storedSessionId, current.title, graph.needsAnswer, graph.seenStore, log = graph.log)
+            is Screen.Chat -> {
+                val chat = viewModel(key = current.key) {
+                    ChatViewModel(graph.rpc, current.storedSessionId, current.title, graph.needsAnswer, graph.seenStore, log = graph.log)
+                }
+                DisposableEffect(chat) {
+                    onDispose { if (!activity.isChangingConfigurations) chat.close() }
+                }
+                ChatScreen(
+                    chat,
+                    onOpenMenu = { scope.launch { drawerState.open() } },
+                    onNewChat = { openChat(null, null) },
+                    onRetryConnect = graph::reconnect,
+                    onStoredSessionId = { id -> if (current.storedSessionId == null) show(current.copy(storedSessionId = id)) },
+                )
             }
-            DisposableEffect(chat) {
-                onDispose { if (!activity.isChangingConfigurations) chat.close() }
-            }
-            ChatScreen(
-                chat,
-                onBack = { screen = Screen.Sessions },
-                onRetryConnect = graph::reconnect,
-                onStoredSessionId = { id -> if (current.storedSessionId == null) screen = Screen.Chat(id, current.title) },
-            )
+            else -> Unit
         }
     }
 }

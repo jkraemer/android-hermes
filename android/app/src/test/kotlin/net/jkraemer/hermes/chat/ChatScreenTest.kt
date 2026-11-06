@@ -2,6 +2,7 @@ package net.jkraemer.hermes.chat
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -43,7 +44,8 @@ class ChatScreenTest {
     private val peer = FakePeer()
     private val needsAnswer = MutableStateFlow(emptySet<String>())
     private var reconnects = 0
-    private var backs = 0
+    private var menus = 0
+    private var newChats = 0
     private val storedIds = mutableListOf<String>()
     private lateinit var viewModel: ChatViewModel
     private lateinit var seenStore: SeenStore
@@ -56,7 +58,8 @@ class ChatScreenTest {
             MaterialTheme {
                 ChatScreen(
                     viewModel,
-                    onBack = { backs++ },
+                    onOpenMenu = { menus++ },
+                    onNewChat = { newChats++ },
                     onRetryConnect = { reconnects++ },
                     onStoredSessionId = { storedIds += it },
                     clock = { NOW },
@@ -206,10 +209,18 @@ class ChatScreenTest {
     }
 
     @Test
-    fun backButtonLeaves() {
+    fun menuButtonOpensTheDrawerInsteadOfGoingBack() {
         show()
-        compose.onNodeWithContentDescription("Back").performClick()
-        assertEquals(1, backs)
+        compose.onAllNodes(hasContentDescription("Back")).assertCountEquals(0)
+        compose.onNodeWithContentDescription("Menu").performClick()
+        assertEquals(1, menus)
+    }
+
+    @Test
+    fun plusButtonStartsANewChat() {
+        show()
+        compose.onNodeWithContentDescription("New chat").performClick()
+        assertEquals(1, newChats)
     }
 
     @Test

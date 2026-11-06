@@ -4,6 +4,15 @@ import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.test.hasTestTag
@@ -37,9 +46,9 @@ import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
 
-private val NOW = Instant.parse("2026-11-05T12:00:00Z")
+internal val NOW = Instant.parse("2026-11-05T12:00:00Z")
 
-private fun session(
+internal fun session(
     id: String,
     title: String? = id,
     preview: String? = null,
@@ -48,9 +57,9 @@ private fun session(
     lastActive: Instant = NOW.minusSeconds(60),
 ) = SessionSummary(id, title, preview, source, lastActive, lastActive, 1, pinned, archived = false)
 
-private fun hit(session: SessionSummary, snippet: Snippet? = null) = SearchHit(session, snippet)
+internal fun hit(session: SessionSummary, snippet: Snippet? = null) = SearchHit(session, snippet)
 
-private class FakeSource(
+internal class FakeSource(
     var sessions: List<SessionSummary> = emptyList(),
     var total: Int = sessions.size,
     var searchResults: List<SearchHit> = emptyList(),
@@ -91,6 +100,9 @@ class SessionListScreenTest {
     private val opened = mutableListOf<Pair<String?, String?>>()
     private var loggedOut = 0
     private var reconnects = 0
+    private var menus = 0
+    private lateinit var seen: SeenStore
+    private lateinit var viewModel: SessionListViewModel
 
     private fun show(vararg sessions: SessionSummary, total: Int = sessions.size) {
         source.sessions = sessions.toList()
@@ -100,14 +112,15 @@ class SessionListScreenTest {
 
     private fun show() {
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-test", Context.MODE_PRIVATE)
-        val viewModel = SessionListViewModel(
-            source, needsAnswer, SeenStore(prefs) { NOW.minusSeconds(86_400) },
-            Clock.fixed(NOW, ZoneOffset.UTC),
-        )
+        seen = SeenStore(prefs) { NOW.minusSeconds(86_400) }
+        val clock = Clock.fixed(NOW, ZoneOffset.UTC)
+        viewModel = SessionListViewModel(source, needsAnswer, seen, clock)
         compose.setContent {
             MaterialTheme {
                 SessionListScreen(
                     viewModel, host = "hermes.example.ts.net",
+                    onOpenMenu = { menus++ },
+                    clock = clock,
                     onOpenChat = { id, title -> opened += id to title },
                     onNotLoggedIn = { loggedOut++ },
                     onRetryConnect = { reconnects++ },
@@ -116,15 +129,74 @@ class SessionListScreenTest {
         }
     }
 
+    private fun openSearch() = compose.onNodeWithContentDescription("Search").performClick()
+
     private fun waitForText(text: String) = compose.waitUntil(10_000) {
         compose.onAllNodes(androidx.compose.ui.test.hasText(text)).fetchSemanticsNodes().isNotEmpty()
     }
 
+    private fun hasCount(description: String) =
+        compose.onAllNodes(hasContentDescription(description)).fetchSemanticsNodes().size
+
     @Test
-    fun showsCronTag() {
-        show(session("a", title = "Morning briefing", source = "cron"))
+    fun topBarIsCenteredRecentsWithAMenuButtonAndNoHermesTitle() {
+        show(session("a"))
+        waitForText("a")
+        compose.onNodeWithText("Recents").assertIsDisplayed()
+        compose.onAllNodes(hasText("Hermes")).assertCountEquals(0)
+        compose.onNodeWithContentDescription("Menu").performClick()
+        assertEquals(1, menus)
+        val bar = compose.onNodeWithText("Recents").fetchSemanticsNode().boundsInRoot
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        assertEquals(root.center.x, bar.center.x, 2f)
+    }
+
+    @Test
+    fun cronRowsShowAClockIconAndOtherRowsAChatIconInsteadOfATag() {
+        show(session("a", title = "Morning briefing", source = "cron"), session("b", title = "Chatty"))
         waitForText("Morning briefing")
-        compose.onNodeWithText("cron").assertIsDisplayed()
+        assertEquals(1, hasCount("Cron run"))
+        assertEquals(1, hasCount("Chat"))
+        compose.onAllNodes(hasText("cron")).assertCountEquals(0)
+    }
+
+    @Test
+    fun rowsShowNoPreviewAndTheTimeAsTheSecondLine() {
+        show(session("a", title = "Disk cleanup", preview = "Free up space on the NAS", lastActive = NOW.minusSeconds(5 * 60)))
+        waitForText("Disk cleanup")
+        compose.onNodeWithText("5 minutes ago").assertIsDisplayed()
+        compose.onAllNodes(hasText("Free up space", substring = true)).assertCountEquals(0)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h1200dp")
+    fun olderRowsShowDateAndClockTime() {
+        show(session("a", title = "Old one", lastActive = Instant.parse("2026-11-03T14:03:00Z")))
+        waitForText("Old one")
+        // The clock time uses the locale's own spacing, so only the date part is matched.
+        compose.onNode(hasText("Nov 3, ", substring = true) and hasText("2:03", substring = true)).assertIsDisplayed()
+    }
+
+    @Test
+    fun theUnreadDotSitsAtTheRightEndOfTheRowAfterTheTitle() {
+        show(session("a", title = "Morning briefing"))
+        waitForText("Morning briefing")
+        val title = compose.onNodeWithText("Morning briefing", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val dot = compose.onNodeWithTag("unread-dot", useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
+        val root = compose.onRoot().fetchSemanticsNode().boundsInRoot
+        assertTrue("dot $dot is not after the title $title", dot.left >= title.right)
+        assertTrue("dot $dot is not at the right end of $root", root.right - dot.right < 48f * 3)
+    }
+
+    @Test
+    fun aRowOpenedSinceItsLastActivityHasNoDot() {
+        show(session("a", title = "Morning briefing"))
+        seen.markOpened("a", NOW)
+        // Opening a chat does not reload the list by itself; a changed input makes the state read the store again.
+        needsAnswer.value = setOf("unrelated")
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(hasTestTag("unread-dot"), useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+        }
     }
 
     @Test
@@ -164,6 +236,7 @@ class SessionListScreenTest {
         show(session("a", title = "Morning briefing"))
         waitForText("Morning briefing")
 
+        openSearch()
         compose.onNodeWithTag("search").performTextInput("sourdough")
         waitForText("Sourdough hydration")
 
@@ -180,6 +253,7 @@ class SessionListScreenTest {
         source.searchResults = listOf(hit(session("hit", title = "Sourdough hydration")))
         show(session("a", title = "Morning briefing"))
         waitForText("Morning briefing")
+        openSearch()
         compose.onNodeWithTag("search").performTextInput("sourdough")
         waitForText("Sourdough hydration")
 
@@ -200,6 +274,7 @@ class SessionListScreenTest {
     fun duplicateSearchResultsShowOneRow() {
         source.searchResults = listOf(hit(session("hit", title = "Sourdough hydration")), hit(session("hit", title = "Sourdough hydration")))
         show(session("a", title = "Morning briefing"))
+        openSearch()
         compose.onNodeWithTag("search").performTextInput("sourdough")
         waitForText("Sourdough hydration")
         compose.onAllNodes(androidx.compose.ui.test.hasText("Sourdough hydration")).assertCountEquals(1)
@@ -270,6 +345,97 @@ class SessionListScreenTest {
     }
 
     @Test
+    fun roundSearchAndNewChatButtonsShowNoLabelText() {
+        show(session("a"))
+        waitForText("a")
+        compose.onNodeWithContentDescription("Search").assertIsDisplayed()
+        compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
+        compose.onAllNodes(hasText("New chat")).assertCountEquals(0)
+        val search = compose.onNodeWithContentDescription("Search").fetchSemanticsNode().boundsInRoot
+        val plus = compose.onNodeWithContentDescription("New chat").fetchSemanticsNode().boundsInRoot
+        assertTrue("search $search is not left of $plus", search.right < plus.left)
+    }
+
+    @Test
+    fun openingSearchShowsAFocusedFieldAndHidesTheRoundButtons() {
+        show(session("a"))
+        waitForText("a")
+
+        openSearch()
+
+        compose.onNodeWithTag("search").assertIsDisplayed().assertIsFocused()
+        assertEquals(0, hasCount("Search"))
+        assertEquals(0, hasCount("New chat"))
+        assertEquals(1, hasCount("Close search"))
+    }
+
+    @Test
+    fun theFieldsInnerClearButtonShowsOnlyWithTextAndClearsIt() {
+        show(session("a", title = "Morning briefing"))
+        waitForText("Morning briefing")
+        openSearch()
+        assertEquals(0, hasCount("Clear search"))
+
+        compose.onNodeWithTag("search").performTextInput("sour")
+        assertEquals(1, hasCount("Clear search"))
+        compose.onNodeWithContentDescription("Clear search").performClick()
+
+        assertEquals("", viewModel.state.value.query)
+        assertEquals(0, hasCount("Clear search"))
+        assertEquals(1, hasCount("Close search"))
+    }
+
+    @Test
+    fun theOuterCloseButtonClosesSearchAndRestoresTheTimelineAndButtons() {
+        source.searchResults = listOf(hit(session("hit", title = "Sourdough hydration")))
+        show(session("a", title = "Morning briefing"))
+        waitForText("Morning briefing")
+        openSearch()
+        compose.onNodeWithTag("search").performTextInput("sourdough")
+        waitForText("Sourdough hydration")
+
+        compose.onNodeWithContentDescription("Close search").performClick()
+
+        waitForText("Morning briefing")
+        compose.onAllNodes(hasTestTag("search")).assertCountEquals(0)
+        assertEquals(1, hasCount("Search"))
+        assertEquals(1, hasCount("New chat"))
+        assertEquals("", viewModel.state.value.query)
+        compose.onAllNodes(hasText("Sourdough hydration")).assertCountEquals(0)
+    }
+
+    @Test
+    fun searchOpenedFromOutsideStartsFocused() {
+        show(session("a"))
+        viewModel.openSearch()
+        compose.onNodeWithTag("search").assertIsDisplayed().assertIsFocused()
+    }
+
+    @Test
+    fun searchResultsAreRowsWithKindIconTitleAndTheBoldMatchAsSecondLine() {
+        source.searchResults = listOf(
+            hit(session("hit", title = "Baking notes", source = "cron"), Snippet("...the sourdough starter needs feeding", listOf(7..15))),
+            hit(session("id", title = "Plain hit"), null),
+        )
+        show(session("a", title = "Morning briefing"))
+        openSearch()
+        compose.onNodeWithTag("search").performTextInput("sourdough")
+        waitForText("Baking notes")
+
+        assertEquals(1, hasCount("Cron run"))
+        assertEquals(1, hasCount("Chat"))
+        val text = compose.onNodeWithText("...the sourdough starter needs feeding", useUnmergedTree = true).fetchSemanticsNode()
+            .config[SemanticsProperties.Text].single()
+        assertEquals(
+            listOf(AnnotatedString.Range(SpanStyle(fontWeight = FontWeight.Bold), 7, 16)),
+            text.spanStyles,
+        )
+        compose.onAllNodes(hasTestTag("unread-dot"), useUnmergedTree = true).assertCountEquals(0)
+        compose.onNodeWithText("Baking notes").performClick()
+        assertEquals(listOf<Pair<String?, String?>>("hit" to "Baking notes"), opened)
+    }
+
+    @Test
     fun tappingARowOpensItsChat() {
         show(session("a", title = "Morning briefing"))
         waitForText("Morning briefing")
@@ -280,7 +446,7 @@ class SessionListScreenTest {
     @Test
     fun newChatOpensChat() {
         show(session("a"))
-        compose.onNodeWithText("New chat").performClick()
+        compose.onNodeWithContentDescription("New chat").performClick()
         assertEquals(listOf<Pair<String?, String?>>(null to null), opened)
     }
 
@@ -294,7 +460,7 @@ class SessionListScreenTest {
         compose.waitForIdle()
 
         val lastRow = compose.onNodeWithText("s30").fetchSemanticsNode().boundsInRoot
-        val button = compose.onNodeWithText("New chat").fetchSemanticsNode().boundsInRoot
+        val button = compose.onNodeWithContentDescription("New chat").fetchSemanticsNode().boundsInRoot
         assertTrue("last row $lastRow overlaps the button $button", lastRow.bottom <= button.top)
     }
 

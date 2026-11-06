@@ -19,8 +19,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -60,12 +61,15 @@ import net.jkraemer.hermes.core.chat.ToolCall
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import java.time.Instant
 
-/** [onStoredSessionId] reports the stored id a new chat got, so the app can track the chat under it. */
+/**
+ * [onOpenMenu] opens the navigation drawer, [onNewChat] starts another chat.
+ * [onStoredSessionId] reports the stored id a new chat got, so the app can track the chat under it. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
-    onBack: () -> Unit,
+    onOpenMenu: () -> Unit,
+    onNewChat: () -> Unit,
     onRetryConnect: () -> Unit,
     onStoredSessionId: (String) -> Unit,
     clock: () -> Instant = Instant::now,
@@ -93,9 +97,8 @@ fun ChatScreen(
         topBar = {
             TopAppBar(
                 title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                navigationIcon = {
-                    IconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
-                },
+                navigationIcon = { IconButton(onOpenMenu) { Icon(Icons.Filled.Menu, contentDescription = "Menu") } },
+                actions = { IconButton(onNewChat) { Icon(Icons.Filled.Add, contentDescription = "New chat") } },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
