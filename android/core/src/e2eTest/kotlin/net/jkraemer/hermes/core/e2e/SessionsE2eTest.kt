@@ -11,6 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 class SessionsE2eTest {
@@ -44,32 +45,53 @@ class SessionsE2eTest {
         output
     }
 
+    /** A word no earlier session of this long-lived Hermes home contains, so search finds only this run's session. */
+    private fun uniqueWord() = "pong" + UUID.randomUUID().toString().replace("-", "").take(10)
+
     @Test
     fun appSessionIsListedAndSearchable() = runBlocking {
         val app = connect()
         val chat = app.newChat().also { it.startNew() }
-        chat.sendAndAwaitReply("Reply with exactly the word: pong", "pong")
+        val word = uniqueWord()
+        chat.sendAndAwaitReply("Reply with exactly the word: $word", word)
         val id = chat.state.value.storedSessionId!!
 
         assertTrue("session $id not listed", app.sessions.list().sessions.any { it.id == id })
-        assertTrue("session $id not found by search", app.sessions.search("pong").any { it.session.id == id })
+        assertTrue("session $id not found by search", app.sessions.search(word).any { it.session.id == id })
     }
 
     @Test
     fun contentSearchHitCarriesASnippetWithTheMatch() = runBlocking {
         val app = connect()
         val chat = app.newChat().also { it.startNew() }
-        chat.sendAndAwaitReply("Reply with exactly the word: pong", "pong")
+        val word = uniqueWord()
+        chat.sendAndAwaitReply("Reply with exactly the word: $word", word)
         val id = chat.state.value.storedSessionId!!
 
-        val hit = app.sessions.search("pong").single { it.session.id == id }
+        val hit = app.sessions.search(word).single { it.session.id == id }
 
         val snippet = hit.snippet ?: throw AssertionError("search hit for $id has no snippet")
         assertTrue("no matched span in $snippet", snippet.matches.isNotEmpty())
         assertTrue(
-            "matched spans ${snippet.matches.map { snippet.text.substring(it) }} do not include pong",
-            snippet.matches.any { snippet.text.substring(it).contains("pong", ignoreCase = true) },
+            "matched spans ${snippet.matches.map { snippet.text.substring(it) }} do not include $word",
+            snippet.matches.any { snippet.text.substring(it).contains(word, ignoreCase = true) },
         )
+    }
+
+    // The app starts a chat (session.create) at every launch and "+", whether or not anything is sent.
+    // That is only harmless while Hermes keeps such a draft out of the session list.
+    @Test
+    fun aNewChatWithoutAMessageLeavesNoRowInTheSessionList() = runBlocking {
+        val app = connect()
+        val before = app.sessions.list(limit = 100).sessions.map { it.id }.toSet()
+        val chat = app.newChat().also { it.startNew() }
+        val id = chat.state.value.storedSessionId!!
+
+        val after = app.sessions.list(limit = 100).sessions
+        val hits = app.sessions.search(id)
+
+        assertEquals("a draft produced rows: ${after.filter { it.id !in before }}", before, after.map { it.id }.toSet())
+        assertTrue("draft $id found by search: $hits", hits.none { it.session.id == id })
     }
 
     @Test
