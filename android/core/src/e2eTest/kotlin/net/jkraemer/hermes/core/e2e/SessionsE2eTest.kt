@@ -52,19 +52,24 @@ class SessionsE2eTest {
         val id = chat.state.value.storedSessionId!!
 
         assertTrue("session $id not listed", app.sessions.list().sessions.any { it.id == id })
-        assertTrue("session $id not found by search", app.sessions.search("pong").any { it.id == id })
+        assertTrue("session $id not found by search", app.sessions.search("pong").any { it.session.id == id })
     }
 
     @Test
-    fun lastAssistantTextIsTheSessionsReply() = runBlocking {
+    fun contentSearchHitCarriesASnippetWithTheMatch() = runBlocking {
         val app = connect()
         val chat = app.newChat().also { it.startNew() }
         chat.sendAndAwaitReply("Reply with exactly the word: pong", "pong")
         val id = chat.state.value.storedSessionId!!
 
-        val reply = app.sessions.lastAssistantText(id)
+        val hit = app.sessions.search("pong").single { it.session.id == id }
 
-        assertTrue("reply was $reply", reply != null && reply.contains("pong", ignoreCase = true))
+        val snippet = hit.snippet ?: throw AssertionError("search hit for $id has no snippet")
+        assertTrue("no matched span in $snippet", snippet.matches.isNotEmpty())
+        assertTrue(
+            "matched spans ${snippet.matches.map { snippet.text.substring(it) }} do not include pong",
+            snippet.matches.any { snippet.text.substring(it).contains("pong", ignoreCase = true) },
+        )
     }
 
     @Test

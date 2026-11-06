@@ -98,7 +98,7 @@ class SessionsApiTest {
 
     @Test
     fun searchBlankQueryMakesNoRequest() = runBlocking {
-        assertEquals(emptyList<SessionSummary>(), api.search("  "))
+        assertEquals(emptyList<SearchHit>(), api.search("  "))
         assertEquals(0, server.requestCount)
     }
 
@@ -113,7 +113,31 @@ class SessionsApiTest {
         assertEquals("hello world", url.queryParameter("q"))
         assertEquals("telegram,mattermost", url.queryParameter("exclude_sources"))
         assertEquals("5", url.queryParameter("limit"))
-        assertEquals("s1", results.single().id)
+        assertEquals("s1", results.single().session.id)
+    }
+
+    @Test
+    fun searchHitCarriesTheContentSnippetWithItsMatchMarked() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"results":[
+            {"id":"s1","snippet":"...the >>>sourdough<<<\n  starter needs\nfeeding","role":"user","source":"api_server","started_at":1.0}
+        ]}"""))
+
+        val hit = api.search("sourdough").single()
+
+        assertEquals(Snippet("...the sourdough starter needs feeding", listOf(7..15)), hit.snippet)
+    }
+
+    @Test
+    fun searchHitFromAnIdOrTitleMatchHasAPlainSnippet() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"results":[
+            {"id":"s1","snippet":"Session ID: s1","source":"tui","started_at":1.0},
+            {"id":"s2","source":"tui","started_at":1.0}
+        ]}"""))
+
+        val hits = api.search("s1")
+
+        assertEquals(Snippet("Session ID: s1", emptyList()), hits[0].snippet)
+        assertEquals(null, hits[1].snippet)
     }
 
     @Test
@@ -137,12 +161,11 @@ class SessionsApiTest {
 
     @Test
     fun unauthorizedThrowsNotLoggedIn() {
-        repeat(4) { server.enqueue(MockResponse().setResponseCode(401)) }
+        repeat(3) { server.enqueue(MockResponse().setResponseCode(401)) }
         val calls = listOf<suspend () -> Unit>(
             { api.list() },
             { api.search("q") },
             { api.update("s1", title = "x") },
-            { api.lastAssistantText("s1") },
         )
         for (call in calls) {
             try {
@@ -162,49 +185,6 @@ class SessionsApiTest {
         assertEquals(0, summary.messageCount)
     }
 
-    @Test
-    fun lastAssistantTextRequestsTheLatestFewMessages() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"session_id":"c1","messages":[]}"""))
-
-        api.lastAssistantText("c1")
-
-        val url = server.takeRequest().requestUrl!!
-        assertEquals("/api/sessions/c1/messages", url.encodedPath)
-        assertEquals("latest", url.queryParameter("order"))
-        assertEquals("5", url.queryParameter("limit"))
-    }
-
-    @Test
-    fun lastAssistantTextIsTheNewestAssistantMessageWithText() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"messages":[
-            {"role":"user","content":"/attention-check"},
-            {"role":"assistant","content":"Older reply"},
-            {"role":"assistant","content":"Nothing needs attention."},
-            {"role":"tool","content":"{}"},
-            {"role":"assistant","content":null,"tool_calls":[]}
-        ]}"""))
-
-        assertEquals("Nothing needs attention.", api.lastAssistantText("c1"))
-    }
-
-    @Test
-    fun lastAssistantTextIsNullWithoutAssistantText() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"messages":[{"role":"user","content":"hi"}]}"""))
-        server.enqueue(MockResponse().setBody("""{"messages":[]}"""))
-
-        assertEquals(null, api.lastAssistantText("c1"))
-        assertEquals(null, api.lastAssistantText("c1"))
-    }
-
-    @Test
-    fun lastAssistantTextEncodesTheSessionId() = runBlocking {
-        server.enqueue(MockResponse().setBody("""{"messages":[]}"""))
-
-        api.lastAssistantText("a/b c")
-
-        assertEquals("/api/sessions/a%2Fb%20c/messages?order=latest&limit=5", server.takeRequest().path)
-    }
-
     // An unclosed response body keeps its connection from going back to the pool, so the next
     // request would open a new one (sequence number 0 again).
     @Test
@@ -213,14 +193,12 @@ class SessionsApiTest {
         server.enqueue(MockResponse().setResponseCode(500).setBody("down"))
         server.enqueue(MockResponse().setResponseCode(404).setBody("gone"))
         enqueueList()
-        server.enqueue(MockResponse().setBody("""{"messages":[]}"""))
 
         runCatching { api.list() }
         runCatching { api.search("q") }
-        runCatching { api.lastAssistantText("s1") }
+        runCatching { api.update("s1", title = "x") }
         api.list()
-        api.lastAssistantText("s1")
 
-        assertEquals(listOf(0, 1, 2, 3, 4), (0..4).map { server.takeRequest().sequenceNumber })
+        assertEquals(listOf(0, 1, 2, 3), (0..3).map { server.takeRequest().sequenceNumber })
     }
 }

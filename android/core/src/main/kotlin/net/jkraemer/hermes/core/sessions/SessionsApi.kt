@@ -6,11 +6,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
-import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -22,8 +18,6 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.time.Instant
 import java.util.UUID
-
-private const val LAST_MESSAGES_LIMIT = 5
 
 @Serializable
 private data class SessionRow(
@@ -37,6 +31,7 @@ private data class SessionRow(
     @SerialName("message_count") val messageCount: Int = 0,
     val pinned: Boolean = false,
     val archived: Boolean = false,
+    val snippet: String? = null,
 ) {
     fun toSummary(): SessionSummary {
         val started = startedAt ?: 0.0
@@ -52,6 +47,8 @@ private data class SessionRow(
             archived = archived,
         )
     }
+
+    fun toHit() = SearchHit(toSummary(), snippet?.let(::parseSnippet))
 
     private fun Double.toInstant(): Instant = Instant.ofEpochMilli((this * 1000).toLong())
 }
@@ -80,7 +77,7 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
         SessionPage(response.sessions.map { it.toSummary() }, response.total)
     }
 
-    suspend fun search(query: String, limit: Int = 20): List<SessionSummary> {
+    suspend fun search(query: String, limit: Int = 20): List<SearchHit> {
         if (query.isBlank()) return emptyList()
         return withContext(Dispatchers.IO) {
             val url = baseUrl.newBuilder().addPathSegments("api/sessions/search")
@@ -88,27 +85,9 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
                 .addQueryParameter("exclude_sources", excludedSources)
                 .addQueryParameter("limit", limit.coerceIn(1, 100).toString())
                 .build()
-            json.decodeFromString<SearchResponse>(get(url)).results.map { it.toSummary() }
+            json.decodeFromString<SearchResponse>(get(url)).results.map { it.toHit() }
         }
     }
-
-    /**
-     * The text of the session's most recent assistant reply, or null when it has none. Only the
-     * newest few messages are fetched: the reply is at the end, behind at most some tool traffic.
-     */
-    suspend fun lastAssistantText(id: String): String? = withContext(Dispatchers.IO) {
-        val url = baseUrl.newBuilder()
-            .addPathSegments("api/sessions").addPathSegment(id).addPathSegment("messages")
-            .addQueryParameter("order", "latest")
-            .addQueryParameter("limit", LAST_MESSAGES_LIMIT.toString())
-            .build()
-        Json.parseToJsonElement(get(url)).jsonObject.getValue("messages").jsonArray
-            .map { it.jsonObject }
-            .lastOrNull { it["role"]?.jsonPrimitive?.contentOrNull == "assistant" && !it.text().isNullOrBlank() }
-            ?.text()
-    }
-
-    private fun JsonObject.text(): String? = (this["content"] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
     /**
      * Hermes fences every session mutation with a request id and the session's current

@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.jkraemer.hermes.core.auth.NotLoggedInException
+import net.jkraemer.hermes.core.sessions.SearchHit
 import net.jkraemer.hermes.core.sessions.SessionPage
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.SessionsApi
@@ -25,9 +26,8 @@ import java.time.Clock
 /** What the session list needs from the server. */
 interface SessionListSource {
     suspend fun list(offset: Int, limit: Int): SessionPage
-    suspend fun search(query: String, limit: Int): List<SessionSummary>
+    suspend fun search(query: String, limit: Int): List<SearchHit>
     suspend fun update(id: String, title: String?, pinned: Boolean?, archived: Boolean?)
-    suspend fun lastAssistantText(id: String): String?
 }
 
 /** [api] is read on every call because the server, and with it the API, can change. */
@@ -36,7 +36,6 @@ class SessionsApiSource(private val api: () -> SessionsApi) : SessionListSource 
     override suspend fun search(query: String, limit: Int) = api().search(query, limit)
     override suspend fun update(id: String, title: String?, pinned: Boolean?, archived: Boolean?) =
         api().update(id, title, pinned, archived)
-    override suspend fun lastAssistantText(id: String) = api().lastAssistantText(id)
 }
 
 enum class SessionListError { UNREACHABLE, FAILED }
@@ -53,13 +52,11 @@ private data class Loaded(
     val sessions: List<SessionSummary> = emptyList(),
     val total: Int = 0,
     /** Null while the query is blank. */
-    val searchResults: List<SessionSummary>? = null,
+    val searchResults: List<SearchHit>? = null,
     val refreshing: Boolean = false,
     val query: String = "",
     val error: SessionListError? = null,
     val needsLogin: Boolean = false,
-    /** First line of each cron run's reply by stored session id; a run does not change once finished. */
-    val cronReplies: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -75,17 +72,12 @@ class SessionListViewModel(
     private val loaded = MutableStateFlow(Loaded())
     private var loadJob: Job? = null
     private var searchJob: Job? = null
-    private val replyRequested = mutableSetOf<String>()
 
     val state: StateFlow<SessionListState> = combine(loaded, needsAnswer) { loaded, needsAnswer ->
-        val items = (loaded.searchResults?.map { TimelineItem.Row(it, unread = false, needsAnswer = it.id in needsAnswer) }
+        val items = loaded.searchResults?.map { TimelineItem.Row(it.session, unread = false, needsAnswer = it.session.id in needsAnswer) }
             ?: buildTimeline(
                 loaded.sessions, clock.instant(), clock.zone, seen.lastOpened(), seen.baseline, needsAnswer,
-            )).map { item ->
-            // The preview of a cron run is the job prompt; its reply says more.
-            if (item !is TimelineItem.Row) item
-            else loaded.cronReplies[item.session.id]?.let { item.copy(session = item.session.copy(preview = it)) } ?: item
-        }
+            )
         SessionListState(items, loaded.refreshing, loaded.query, loaded.error, loaded.needsLogin)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, SessionListState())
 
@@ -125,28 +117,6 @@ class SessionListViewModel(
 
     fun archive(id: String) = change { source.update(id, null, null, true) }
 
-    /**
-     * Called when a cron row is on screen: fetches the run's reply once, for the row to show instead
-     * of the job prompt. A failed fetch is silent, the row keeps its preview, and is tried again
-     * the next time the row appears.
-     */
-    fun cronRowShown(id: String) {
-        if (!replyRequested.add(id)) return
-        viewModelScope.launch {
-            val reply = try {
-                source.lastAssistantText(id)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                replyRequested.remove(id)
-                return@launch
-            }
-            reply?.lineSequence()?.map(String::trim)?.firstOrNull(String::isNotEmpty)?.let { line ->
-                loaded.update { it.copy(cronReplies = it.cronReplies + (id to line)) }
-            }
-        }
-    }
-
     /** Called once the lost login has been acted on, so showing the screen again does not repeat it. */
     fun loginHandled() = loaded.update { it.copy(needsLogin = false) }
 
@@ -171,7 +141,7 @@ class SessionListViewModel(
         attempt { source.search(query.trim(), SEARCH_LIMIT) }?.let { results ->
             // The query may have changed or been cleared while the search was running.
             loaded.update {
-                if (it.query.trim() == query.trim()) it.copy(searchResults = results.distinctBy(SessionSummary::id)) else it
+                if (it.query.trim() == query.trim()) it.copy(searchResults = results.distinctBy { hit -> hit.session.id }) else it
             }
         }
     }
