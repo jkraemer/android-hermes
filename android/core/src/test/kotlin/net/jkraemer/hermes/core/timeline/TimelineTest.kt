@@ -107,4 +107,39 @@ class TimelineTest {
 
         assertEquals(mapOf("before" to false, "after" to true), rows)
     }
+
+    private fun drawer(sessions: List<SessionSummary>, needsAnswer: Set<String> = emptySet()) =
+        buildDrawerEntries(sessions, emptyMap(), baseline, needsAnswer)
+
+    @Test
+    fun drawerListsEveryPinnedSessionNewestFirst() {
+        val pins = (1..12).map { session("p$it", at(5, 1, it), pinned = true) }
+
+        val entries = drawer(pins + session("r", at(5, 11)))
+
+        assertEquals((12 downTo 1).map { "p$it" }, entries.pinned.map { it.session.id })
+    }
+
+    @Test
+    fun drawerRecentsAreTheTenNewestUnpinnedSessions() {
+        val sessions = (1..14).map { session("s$it", at(5, 1, it)) } + session("pin", at(5, 11), pinned = true)
+
+        val entries = drawer(sessions)
+
+        assertEquals((14 downTo 5).map { "s$it" }, entries.recents.map { it.session.id })
+        assertEquals(listOf("pin"), entries.pinned.map { it.session.id })
+    }
+
+    @Test
+    fun drawerRowsCarryTheUnreadAndNeedsAnswerFlags() {
+        val read = session("read", at(5, 9))
+        val unread = session("unread", at(5, 11))
+
+        val entries = buildDrawerEntries(listOf(read, unread), mapOf("read" to at(5, 10)), baseline, setOf("unread"))
+
+        assertEquals(
+            listOf(TimelineItem.Row(unread, unread = true, needsAnswer = true), TimelineItem.Row(read, unread = false, needsAnswer = false)),
+            entries.recents,
+        )
+    }
 }
