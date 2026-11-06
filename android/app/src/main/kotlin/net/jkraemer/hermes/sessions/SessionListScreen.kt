@@ -6,6 +6,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -50,6 +51,9 @@ import net.jkraemer.hermes.core.timeline.TimelineItem
 
 /** Rows within this distance of the end of the list trigger loading the next page. */
 private const val PREFETCH_DISTANCE = 5
+
+/** Space below the last row so it can scroll clear of the "New chat" button: its height plus its margin. */
+private val FAB_CLEARANCE = 56.dp + 16.dp + 16.dp
 
 private val Bucket.title: String
     get() = when (this) {
@@ -112,7 +116,10 @@ fun SessionListScreen(
                 )
             }
             PullToRefreshBox(state.refreshing, onRefresh = viewModel::refresh, Modifier.fillMaxSize()) {
-                LazyColumn(Modifier.fillMaxSize().testTag("session-list"), listState) {
+                LazyColumn(
+                    Modifier.fillMaxSize().testTag("session-list"), listState,
+                    contentPadding = PaddingValues(bottom = FAB_CLEARANCE),
+                ) {
                     items(
                         state.items,
                         key = { if (it is TimelineItem.Row) it.session.id else (it as TimelineItem.Header).bucket },

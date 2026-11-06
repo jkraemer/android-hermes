@@ -343,6 +343,20 @@ class SessionListScreenTest {
     }
 
     @Test
+    fun lastRowScrollsAboveTheNewChatButton() {
+        val all = (1..30).map { session("s$it", lastActive = NOW.minusSeconds(it * 60L)) }
+        show(*all.toTypedArray())
+        waitForText("s1")
+
+        compose.onNodeWithTag("session-list").performScrollToIndex(all.size)
+        compose.waitForIdle()
+
+        val lastRow = compose.onNodeWithText("s30").fetchSemanticsNode().boundsInRoot
+        val button = compose.onNodeWithText("New chat").fetchSemanticsNode().boundsInRoot
+        assertTrue("last row $lastRow overlaps the button $button", lastRow.bottom <= button.top)
+    }
+
+    @Test
     fun loadsTheNextPageWhenScrolledToTheEnd() {
         val all = (1..60).map { session("s$it", lastActive = NOW.minusSeconds(it * 60L)) }
         show(*all.toTypedArray())
