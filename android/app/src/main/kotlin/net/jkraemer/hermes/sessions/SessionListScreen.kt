@@ -121,6 +121,7 @@ fun SessionListScreen(
                             is TimelineItem.Header -> BucketHeader(item.bucket)
                             is TimelineItem.Row -> SessionRow(
                                 item,
+                                onShown = { viewModel.cronRowShown(item.session.id) },
                                 onOpen = { onOpenChat(item.session.id, item.session.title) },
                                 onRename = { viewModel.rename(item.session.id, it) },
                                 onSetPinned = { viewModel.setPinned(item.session.id, it) },
@@ -160,6 +161,7 @@ private fun BucketHeader(bucket: Bucket) {
 @Composable
 private fun SessionRow(
     row: TimelineItem.Row,
+    onShown: () -> Unit,
     onOpen: () -> Unit,
     onRename: (String) -> Unit,
     onSetPinned: (Boolean) -> Unit,
@@ -169,6 +171,7 @@ private fun SessionRow(
     var menuOpen by remember { mutableStateOf(false) }
     var renaming by remember { mutableStateOf(false) }
     val title = session.title ?: session.preview ?: "Untitled"
+    if (session.isCron) LaunchedEffect(session.id) { onShown() }
 
     Box {
         Column(

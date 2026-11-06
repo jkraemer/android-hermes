@@ -137,11 +137,12 @@ class SessionsApiTest {
 
     @Test
     fun unauthorizedThrowsNotLoggedIn() {
-        repeat(3) { server.enqueue(MockResponse().setResponseCode(401)) }
+        repeat(4) { server.enqueue(MockResponse().setResponseCode(401)) }
         val calls = listOf<suspend () -> Unit>(
             { api.list() },
             { api.search("q") },
             { api.update("s1", title = "x") },
+            { api.lastAssistantText("s1") },
         )
         for (call in calls) {
             try {
@@ -159,5 +160,48 @@ class SessionsApiTest {
         assertFalse(summary.pinned)
         assertFalse(summary.archived)
         assertEquals(0, summary.messageCount)
+    }
+
+    @Test
+    fun lastAssistantTextRequestsTheLatestFewMessages() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"session_id":"c1","messages":[]}"""))
+
+        api.lastAssistantText("c1")
+
+        val url = server.takeRequest().requestUrl!!
+        assertEquals("/api/sessions/c1/messages", url.encodedPath)
+        assertEquals("latest", url.queryParameter("order"))
+        assertEquals("5", url.queryParameter("limit"))
+    }
+
+    @Test
+    fun lastAssistantTextIsTheNewestAssistantMessageWithText() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"messages":[
+            {"role":"user","content":"/attention-check"},
+            {"role":"assistant","content":"Older reply"},
+            {"role":"assistant","content":"Nothing needs attention."},
+            {"role":"tool","content":"{}"},
+            {"role":"assistant","content":null,"tool_calls":[]}
+        ]}"""))
+
+        assertEquals("Nothing needs attention.", api.lastAssistantText("c1"))
+    }
+
+    @Test
+    fun lastAssistantTextIsNullWithoutAssistantText() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"messages":[{"role":"user","content":"hi"}]}"""))
+        server.enqueue(MockResponse().setBody("""{"messages":[]}"""))
+
+        assertEquals(null, api.lastAssistantText("c1"))
+        assertEquals(null, api.lastAssistantText("c1"))
+    }
+
+    @Test
+    fun lastAssistantTextEncodesTheSessionId() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"messages":[]}"""))
+
+        api.lastAssistantText("a/b c")
+
+        assertEquals("/api/sessions/a%2Fb%20c/messages?order=latest&limit=5", server.takeRequest().path)
     }
 }

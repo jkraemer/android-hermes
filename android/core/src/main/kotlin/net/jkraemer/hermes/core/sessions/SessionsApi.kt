@@ -6,7 +6,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -18,6 +22,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.time.Instant
 import java.util.UUID
+
+private const val LAST_MESSAGES_LIMIT = 5
 
 @Serializable
 private data class SessionRow(
@@ -85,6 +91,24 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
             json.decodeFromString<SearchResponse>(get(url)).results.map { it.toSummary() }
         }
     }
+
+    /**
+     * The text of the session's most recent assistant reply, or null when it has none. Only the
+     * newest few messages are fetched: the reply is at the end, behind at most some tool traffic.
+     */
+    suspend fun lastAssistantText(id: String): String? = withContext(Dispatchers.IO) {
+        val url = baseUrl.newBuilder()
+            .addPathSegments("api/sessions").addPathSegment(id).addPathSegment("messages")
+            .addQueryParameter("order", "latest")
+            .addQueryParameter("limit", LAST_MESSAGES_LIMIT.toString())
+            .build()
+        Json.parseToJsonElement(get(url)).jsonObject.getValue("messages").jsonArray
+            .map { it.jsonObject }
+            .lastOrNull { it["role"]?.jsonPrimitive?.contentOrNull == "assistant" && !it.text().isNullOrBlank() }
+            ?.text()
+    }
+
+    private fun JsonObject.text(): String? = (this["content"] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
     /**
      * Hermes fences every session mutation with a request id and the session's current

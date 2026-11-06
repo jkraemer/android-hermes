@@ -55,6 +55,11 @@ private class FakeSource(
     val updates = mutableListOf<List<Any?>>()
     val listCalls = mutableListOf<Int>()
 
+    /** Last assistant replies by session id; a missing id has no reply. */
+    var replies: Map<String, String> = emptyMap()
+    var replyFailure: Exception? = null
+    val replyCalls = mutableListOf<String>()
+
     /** When set, searches wait for it; [searchStarted] counts the searches that have begun. */
     var searchGate: CompletableDeferred<Unit>? = null
     @Volatile var searchStarted = 0
@@ -70,6 +75,12 @@ private class FakeSource(
         searchStarted++
         searchGate?.await()
         return searchResults
+    }
+
+    override suspend fun lastAssistantText(id: String): String? {
+        replyCalls += id
+        replyFailure?.let { throw it }
+        return replies[id]
     }
 
     override suspend fun update(id: String, title: String?, pinned: Boolean?, archived: Boolean?) {
@@ -121,6 +132,57 @@ class SessionListScreenTest {
         show(session("a", title = "Morning briefing", source = "cron"))
         waitForText("Morning briefing")
         compose.onNodeWithText("cron").assertIsDisplayed()
+    }
+
+    @Test
+    fun cronRowShowsTheStartOfTheRunsReplyInsteadOfThePrompt() {
+        source.replies = mapOf("c" to "  Nothing needs attention.\nChecked 4 hosts.\n")
+        show(
+            session("c", title = "Attention check", preview = "/attention-check", source = "cron"),
+            session("t", title = "Chatty", preview = "Hello there"),
+        )
+
+        waitForText("Nothing needs attention.")
+        compose.onAllNodes(androidx.compose.ui.test.hasText("/attention-check")).assertCountEquals(0)
+        compose.onAllNodes(androidx.compose.ui.test.hasText("Checked 4 hosts.", substring = true)).assertCountEquals(0)
+        compose.onNodeWithText("Hello there").assertIsDisplayed()
+        assertEquals(listOf("c"), source.replyCalls)
+    }
+
+    @Test
+    fun cronReplyIsFetchedOncePerSession() {
+        source.replies = mapOf("c" to "Done.")
+        show(session("c", title = "Attention check", preview = "/attention-check", source = "cron"))
+        waitForText("Done.")
+
+        compose.onNodeWithTag("session-list").performTouchInput { swipeDown() }
+        compose.waitUntil(10_000) { source.listCalls.size >= 2 }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Done.").assertIsDisplayed()
+        assertEquals(listOf("c"), source.replyCalls)
+    }
+
+    @Test
+    fun cronRowKeepsItsPreviewWhenTheReplyCannotBeFetched() {
+        source.replyFailure = IOException("timeout")
+        show(session("c", title = "Attention check", preview = "/attention-check", source = "cron"))
+        waitForText("/attention-check")
+        compose.waitUntil(10_000) { source.replyCalls.isNotEmpty() }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("/attention-check").assertIsDisplayed()
+        compose.onAllNodes(androidx.compose.ui.test.hasText("Can't reach", substring = true)).assertCountEquals(0)
+        compose.onAllNodes(androidx.compose.ui.test.hasText("Something went wrong")).assertCountEquals(0)
+    }
+
+    @Test
+    fun cronRowKeepsItsPreviewWhenTheRunHasNoReply() {
+        show(session("c", title = "Attention check", preview = "/attention-check", source = "cron"))
+        compose.waitUntil(10_000) { source.replyCalls.isNotEmpty() }
+        compose.waitForIdle()
+
+        compose.onNodeWithText("/attention-check").assertIsDisplayed()
     }
 
     @Test
