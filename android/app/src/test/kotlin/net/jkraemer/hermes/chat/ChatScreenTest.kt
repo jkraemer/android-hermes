@@ -44,6 +44,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.annotation.Config
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
@@ -86,6 +87,15 @@ class ChatScreenTest {
         }
     }
 
+    /**
+     * A reply is parsed off the main thread and handed back to it; waitUntil only polls, so each
+     * poll also runs what is queued on the main looper, or a late hand-back would never land.
+     */
+    private fun waitForParsedReplies(count: Int) = compose.waitUntil(10_000) {
+        ShadowLooper.idleMainLooper()
+        viewModel.parsedReplies.value.size == count
+    }
+
     private fun waitForText(text: String, substring: Boolean = false) = compose.waitUntil(10_000) {
         compose.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty()
     }
@@ -113,7 +123,7 @@ class ChatScreenTest {
         show()
         compose.waitUntil(10_000) { viewModel.chat.value.items.size == 2 * pairs }
         // The replies are parsed on Dispatchers.Default, which waitForIdle does not wait for.
-        compose.waitUntil(10_000) { viewModel.parsedReplies.value.size == pairs }
+        waitForParsedReplies(pairs)
         compose.waitForIdle()
     }
 
@@ -168,7 +178,7 @@ class ChatScreenTest {
         peer.event("message.complete", textPayload(longReply(1, 30)))
         // Emitted events reach the chat through the main looper, which waitUntil alone does not run.
         compose.waitForIdle()
-        compose.waitUntil(10_000) { viewModel.parsedReplies.value.size == 7 }
+        waitForParsedReplies(7)
         compose.waitForIdle()
     }
 
@@ -195,7 +205,7 @@ class ChatScreenTest {
         peer.resume = longTranscript(6, lastReply = longReply(1, 30))
 
         reconnect()
-        compose.waitUntil(10_000) { viewModel.parsedReplies.value.size == 7 }
+        waitForParsedReplies(7)
         compose.waitForIdle()
 
         assertEquals("reopened", 2, peer.calls.count { it.first == "session.resume" })
