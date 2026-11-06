@@ -4,6 +4,14 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-06
+
+### Fixed
+
+- With the keyboard open, the composer sits right on top of it and the top
+  bar stays in place, instead of floating halfway up the screen.
+- Closing the keyboard folds an empty composer back into its one-row pill.
+
 ## [0.1.0] - 2026-11-06
 
 ### Added
