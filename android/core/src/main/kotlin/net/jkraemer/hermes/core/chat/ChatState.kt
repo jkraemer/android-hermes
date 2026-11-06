@@ -7,6 +7,12 @@ import java.time.Instant
 /** Used when neither the request nor the server's config says how long Hermes waits for an answer. */
 const val APPROVAL_TIMEOUT_SECONDS = 300L
 
+private const val MAX_APPROVAL_TIMEOUT_SECONDS = 86_400.0
+
+/** [seconds] as a whole timeout when it is within 1 s..24 h, else null: the server's value is not trusted blindly. */
+fun approvalTimeoutOrNull(seconds: Double?): Long? =
+    seconds?.takeIf { it >= 1.0 && it <= MAX_APPROVAL_TIMEOUT_SECONDS }?.toLong()
+
 enum class ApprovalChoice(val wire: String) { ONCE("once"), SESSION("session"), ALWAYS("always"), DENY("deny") }
 
 sealed interface CardStatus {

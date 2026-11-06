@@ -202,7 +202,7 @@ private fun approvalItem(requestId: String, params: JsonObject, receivedAt: Inst
             else -> true
         }
     }
-    val timeoutSeconds = (params["timeout_s"] as? JsonPrimitive)?.doubleOrNull?.toLong() ?: defaultTimeoutSeconds
+    val timeoutSeconds = approvalTimeoutOrNull((params["timeout_s"] as? JsonPrimitive)?.doubleOrNull) ?: defaultTimeoutSeconds
     return ChatItem.Approval(
         requestId = requestId,
         approvalId = params["request_id"].string(),

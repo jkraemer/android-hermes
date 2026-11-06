@@ -177,8 +177,8 @@ class ChatController(
             null
         }
         val seconds = (((config as? JsonObject)?.get("approvals") as? JsonObject)?.get("timeout") as? JsonPrimitive)
-            ?.takeIf { !it.isString }?.doubleOrNull?.toLong()
-        approvalTimeoutSeconds = seconds?.takeIf { it > 0 } ?: APPROVAL_TIMEOUT_SECONDS
+            ?.takeIf { !it.isString }?.doubleOrNull
+        approvalTimeoutSeconds = approvalTimeoutOrNull(seconds) ?: APPROVAL_TIMEOUT_SECONDS
     }
 
     private fun requireLiveSession(): String =

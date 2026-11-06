@@ -131,6 +131,20 @@ class ChatControllerTest {
         assertEquals(NOW.plusSeconds(45), deadlineAfterApprovalRequest(peer, chat, ""","timeout_s":45"""))
     }
 
+    @Test fun approvalTimeoutAcceptsTheEdgesOfTheValidRange() {
+        for (seconds in listOf(1L, 86_400L)) {
+            testWith({ it.on("config.get", """{"config":{"approvals":{"timeout":$seconds}}}""") }) { peer, chat ->
+                assertEquals(NOW.plusSeconds(seconds), deadlineAfterApprovalRequest(peer, chat))
+            }
+        }
+    }
+
+    @Test fun approvalTimeoutInTheRequestFallsBackToTheConfiguredOneWhenOutOfRange() = testWith({ peer ->
+        peer.on("config.get", """{"config":{"approvals":{"timeout":120}}}""")
+    }) { peer, chat ->
+        assertEquals(NOW.plusSeconds(120), deadlineAfterApprovalRequest(peer, chat, ""","timeout_s":1e30"""))
+    }
+
     @Test fun approvalTimeoutFallsBackTo300WhenTheConfigCallFails() = testWith({ peer ->
         peer.on("config.get") { throw IOException("dropped") }
     }) { peer, chat ->
@@ -150,6 +164,9 @@ class ChatControllerTest {
             """{"config":{"approvals":{"timeout":"soon"}}}""",
             """{"config":{"approvals":{"timeout":0}}}""",
             """{"config":{"approvals":{"timeout":-5}}}""",
+            """{"config":{"approvals":{"timeout":1e30}}}""",
+            """{"config":{"approvals":{"timeout":86401}}}""",
+            """{"config":{"approvals":{"timeout":0.5}}}""",
             """{"config":{"approvals":null}}""",
             """{"config":"x"}""",
             """{}""",

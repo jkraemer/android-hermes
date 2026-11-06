@@ -179,6 +179,13 @@ class ChatReducerTest {
         assertEquals(now.plusSeconds(60), approval("""{"request_id":"r1","command":"c","timeout_s":60}""").deadline)
     }
 
+    @Test fun approvalDeadlineIgnoresOutOfRangeTimeouts() {
+        for (bad in listOf("1e30", "0", "-5", "86401")) {
+            assertEquals(bad, now.plusSeconds(300), approval("""{"request_id":"r1","command":"c","timeout_s":$bad}""").deadline)
+        }
+        assertEquals(now.plusSeconds(86_400), approval("""{"request_id":"r1","command":"c","timeout_s":86400}""").deadline)
+    }
+
     @Test fun requestCancelMarksApprovalExpired() {
         val state = run(
             empty,

@@ -44,6 +44,7 @@ private const val MAX_RECONNECT_DELAY_MS = 30_000L
 private const val READY_TIMEOUT_MS = 30_000L
 private const val NORMAL_CLOSURE = 1000
 private const val METHOD_NOT_FOUND = -32601
+private val TICKET_QUERY = Regex("""ticket=[^&\s"']*""")
 
 /** Delay before reconnect attempt number [attempt] (0-based): 1 s, doubling, capped at 30 s. */
 internal fun reconnectDelayMs(attempt: Int): Long =
@@ -91,6 +92,9 @@ class RpcConnection(
     private var pingJob: Job? = null
     private var attempt: Job? = null
     private var inflight: CompletableDeferred<Unit>? = null
+
+    /** The ticket of the latest attempt, known so it can be kept out of failure messages. */
+    @Volatile private var ticketInUse: String? = null
 
     /**
      * Opens the socket and returns once the gateway is ready for requests. Does nothing when
@@ -142,18 +146,28 @@ class RpcConnection(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            transition(ConnectionState.Failed(e.message ?: "Connection failed", needsLogin = false))
+            val reason = redactTicket(e.message ?: "Connection failed")
+            transition(ConnectionState.Failed(reason, needsLogin = false), logAs = "${e::class.qualifiedName}: $reason")
             throw e
         }
     }
 
-    /** A closed connection stays [ConnectionState.Disconnected]. */
-    private fun transition(newState: ConnectionState) {
-        synchronized(lock) { if (!closed) setState(newState) }
+    /**
+     * The ticket is a credential and travels in the upgrade URL's query, so a failure message that
+     * quotes the URL, or the ticket itself, must not reach the state or the log.
+     */
+    private fun redactTicket(message: String): String {
+        val withoutQuery = message.replace(TICKET_QUERY, "ticket=…")
+        return ticketInUse?.takeIf { it.isNotEmpty() }?.let { withoutQuery.replace(it, "…") } ?: withoutQuery
+    }
+
+    /** A closed connection stays [ConnectionState.Disconnected]. [logAs] replaces the reason in the log line. */
+    private fun transition(newState: ConnectionState, logAs: String? = null) {
+        synchronized(lock) { if (!closed) setState(newState, logAs) }
     }
 
     /** Must be called under [lock]. Logs changes only. */
-    private fun setState(newState: ConnectionState) {
+    private fun setState(newState: ConnectionState, logAs: String? = null) {
         if (_state.value == newState) return
         _state.value = newState
         log.log("connection: " + when (newState) {
@@ -161,13 +175,14 @@ class RpcConnection(
             ConnectionState.Connecting -> "Connecting"
             ConnectionState.Ready -> "Ready"
             is ConnectionState.Failed ->
-                if (newState.needsLogin) "Failed (login needed): ${newState.reason}" else "Failed: ${newState.reason}"
+                if (newState.needsLogin) "Failed (login needed): ${newState.reason}" else "Failed: ${logAs ?: newState.reason}"
         })
     }
 
     private suspend fun establish() {
         transition(ConnectionState.Connecting)
         val ticket = ticketProvider()
+        ticketInUse = ticket
         val link = Link()
         synchronized(lock) {
             if (closed) throw IOException("Connection closed")

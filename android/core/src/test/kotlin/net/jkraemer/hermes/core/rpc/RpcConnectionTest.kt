@@ -370,6 +370,39 @@ class RpcConnectionTest {
     }
 
     @Test
+    fun aConnectFailureNeverLogsTheTicketNorShowsItInTheState() {
+        // A failure message that quotes the upgrade URL carries the ticket in its query.
+        val leaking = OkHttpClient.Builder()
+            .addInterceptor { chain -> throw IOException("failed to reach ${chain.request().url}") }
+            .build()
+        val lines = CopyOnWriteArrayList<String>()
+        val connection = RpcConnection(leaking, server.url("/"), { "ticket-s3cr3t" }, scope, 60_000, { }, { lines += it })
+        connections += connection
+
+        await { runCatching { connection.connect() } }
+
+        assertEquals("connection: Connecting", lines[0])
+        assertTrue(lines.toString(), lines[1].startsWith("connection: Failed: java.io.IOException: failed to reach "))
+        assertTrue(lines.toString(), "ticket=…" in lines[1])
+        assertTrue(lines.toString(), lines.none { "s3cr3t" in it })
+        assertTrue((connection.state.value as ConnectionState.Failed).reason.let { "s3cr3t" !in it && "ticket=…" in it })
+    }
+
+    @Test
+    fun aConnectFailureLogsTheTicketOnlyAsAnEllipsisEvenWithoutTheQueryKey() {
+        val lines = CopyOnWriteArrayList<String>()
+        val connection = RpcConnection(
+            OkHttpClient.Builder().addInterceptor { throw IOException("rejected ticket-s3cr3t here") }.build(),
+            server.url("/"), { "ticket-s3cr3t" }, scope, 60_000, { }, { lines += it },
+        )
+        connections += connection
+
+        await { runCatching { connection.connect() } }
+
+        assertTrue(lines.toString(), lines.none { "s3cr3t" in it })
+    }
+
+    @Test
     fun logsALostLoginAsNeedingLogin() {
         val lines = CopyOnWriteArrayList<String>()
         val connection = newConnection(ticketProvider = { throw NotLoggedInException() }, log = { lines += it })
