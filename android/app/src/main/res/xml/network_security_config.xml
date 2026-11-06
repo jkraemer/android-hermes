@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The app talks only to the one Hermes server the user configures. Hermes serves plain HTTP
+  itself, so a server reached over Tailscale (whose WireGuard tunnel already encrypts the
+  traffic) is http://. Servers behind an HTTPS proxy keep using TLS.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
