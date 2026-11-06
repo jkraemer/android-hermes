@@ -369,10 +369,10 @@ class SessionListScreenTest {
     }
 
     @Test
-    fun unreachableServerShowsTailscaleHintAndRetries() {
+    fun unreachableServerShowsConnectionHintAndRetries() {
         source.failure = IOException("timeout")
         show()
-        waitForText("Can't reach hermes.example.ts.net — is Tailscale on?")
+        waitForText("Can't reach hermes.example.ts.net. Check your connection or VPN.")
 
         source.failure = null
         source.sessions = listOf(session("a", title = "Morning briefing"))
@@ -389,7 +389,7 @@ class SessionListScreenTest {
 
         source.failure = IOException("timeout")
         compose.onNodeWithTag("session-list").performTouchInput { swipeDown() }
-        waitForText("Can't reach hermes.example.ts.net — is Tailscale on?")
+        waitForText("Can't reach hermes.example.ts.net. Check your connection or VPN.")
 
         compose.onNodeWithText("Morning briefing").assertIsDisplayed()
     }

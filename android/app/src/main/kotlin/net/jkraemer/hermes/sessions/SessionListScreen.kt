@@ -108,7 +108,7 @@ fun SessionListScreen(
             )
             state.error?.let { error ->
                 ErrorBanner(
-                    if (error == SessionListError.UNREACHABLE) "Can't reach $host — is Tailscale on?" else "Something went wrong",
+                    if (error == SessionListError.UNREACHABLE) "Can't reach $host. Check your connection or VPN." else "Something went wrong",
                     onRetry = {
                         viewModel.refresh()
                         onRetryConnect()

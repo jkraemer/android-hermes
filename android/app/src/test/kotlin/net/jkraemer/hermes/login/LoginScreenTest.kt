@@ -67,10 +67,10 @@ class LoginScreenTest {
     }
 
     @Test
-    fun showsTailscaleHintWhenUnreachable() {
+    fun showsConnectionHintWhenUnreachable() {
         show(result = LoginResult.Unreachable(IOException("timeout")))
         signIn()
-        compose.onNodeWithText("Can't reach hermes.example.ts.net — is Tailscale on?").assertIsDisplayed()
+        compose.onNodeWithText("Can't reach hermes.example.ts.net. Check your connection or VPN.").assertIsDisplayed()
     }
 
     @Test

@@ -42,7 +42,7 @@ class LoginViewModel(
                     LoginResult.BadCredentials -> it.copy(busy = false, error = "Wrong username or password")
                     LoginResult.RateLimited -> it.copy(busy = false, error = "Too many attempts, wait a minute")
                     is LoginResult.Unreachable ->
-                        it.copy(busy = false, error = "Can't reach ${url.host} — is Tailscale on?")
+                        it.copy(busy = false, error = "Can't reach ${url.host}. Check your connection or VPN.")
                 }
             }
         }
