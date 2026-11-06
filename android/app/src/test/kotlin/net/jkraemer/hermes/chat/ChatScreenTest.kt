@@ -2,7 +2,13 @@ package net.jkraemer.hermes.chat
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.focus.FocusManager
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.requestFocus
+import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -57,12 +63,14 @@ class ChatScreenTest {
     private val storedIds = mutableListOf<String>()
     private lateinit var viewModel: ChatViewModel
     private lateinit var seenStore: SeenStore
+    private lateinit var focusManager: FocusManager
 
     private fun show(storedSessionId: String? = "stored1", title: String? = "Morning briefing", cron: Boolean = false) {
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-test", Context.MODE_PRIVATE)
         seenStore = SeenStore(prefs)
         viewModel = ChatViewModel(peer, storedSessionId, title, needsAnswer, seenStore) { NOW }
         compose.setContent {
+            focusManager = LocalFocusManager.current
             MaterialTheme {
                 ChatScreen(
                     viewModel,
@@ -222,10 +230,10 @@ class ChatScreenTest {
         assertEquals(paragraph, top, compose.onNodeWithText(paragraph, substring = true).fetchSemanticsNode().positionInRoot.y, 0.5f)
     }
 
-    /** The first paragraph of reply 6 or 7 that is in view, and its top. */
+    /** The first question or reply paragraph that is in view, and its top. */
     private fun firstParagraphShown(): Pair<String, Float> {
         val messages = compose.onNodeWithTag("messages").fetchSemanticsNode().boundsInRoot
-        val paragraphs = (1..6).map { "Reply 6 paragraph $it says" } + (1..15).map { "Reply 7 paragraph $it says" }
+        val paragraphs = (1..7).flatMap { n -> listOf("Question $n") + (1..15).map { "Reply $n paragraph $it says" } }
         return paragraphs.firstNotNullOf { text ->
             compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().firstOrNull()
                 ?.positionInRoot?.y?.takeIf { it >= messages.top && it < messages.bottom }?.let { text to it }
@@ -534,5 +542,144 @@ class ChatScreenTest {
 
         compose.waitUntil(10_000) { peer.calls.any { it.first == "session.events.since" } }
         compose.waitUntil(10_000) { compose.onAllNodesWithText("Couldn't open this chat").fetchSemanticsNodes().isEmpty() }
+    }
+
+    private fun SemanticsNodeInteraction.bounds(): Rect = fetchSemanticsNode().boundsInRoot
+
+    private fun showOpenChat(running: Boolean = false) {
+        peer.resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":$running,"open_requests":[]}"""
+        show()
+        compose.waitUntil(10_000) { peer.calls.any { it.first == "session.events.since" } }
+        compose.waitForIdle()
+    }
+
+    /** Whether [button] sits beside the message field, in one row with it, rather than below it. */
+    private fun assertBesideTheField(button: SemanticsNodeInteraction) {
+        val field = compose.onNodeWithTag("composer").bounds()
+        val bounds = button.bounds()
+        assertTrue("button $bounds is right of the field $field", bounds.left >= field.right)
+        assertTrue("button $bounds is level with the field $field", bounds.center.y > field.top && bounds.center.y < field.bottom)
+    }
+
+    private fun assertBelowTheField(button: SemanticsNodeInteraction) {
+        val field = compose.onNodeWithTag("composer").bounds()
+        assertTrue("button ${button.bounds()} is below the field $field", button.bounds().top >= field.bottom)
+    }
+
+    private fun clearFocus() {
+        compose.runOnIdle { focusManager.clearFocus() }
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun anEmptyUnfocusedComposerIsOnePillWithSendBesideTheField() {
+        showOpenChat()
+
+        compose.onNodeWithText("Message Hermes").assertIsDisplayed()
+        assertBesideTheField(compose.onNodeWithContentDescription("Send"))
+        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
+    }
+
+    @Test
+    fun aRunningTurnShowsStopInThePill() {
+        showOpenChat(running = true)
+
+        assertBesideTheField(compose.onNodeWithContentDescription("Stop"))
+        compose.onNodeWithContentDescription("Send").assertDoesNotExist()
+    }
+
+    @Test
+    fun focusingTheComposerMovesSendToARowBelowTheField() {
+        showOpenChat()
+
+        compose.onNodeWithTag("composer").requestFocus()
+        compose.waitForIdle()
+        assertBelowTheField(compose.onNodeWithContentDescription("Send"))
+        compose.onNodeWithText("Message Hermes").assertIsDisplayed()
+
+        clearFocus()
+        assertBesideTheField(compose.onNodeWithContentDescription("Send"))
+    }
+
+    @Test
+    fun aComposerWithTextStaysExpandedWithoutFocus() {
+        showOpenChat()
+        compose.onNodeWithTag("composer").performTextInput("hello")
+
+        clearFocus()
+
+        assertBelowTheField(compose.onNodeWithContentDescription("Send"))
+        compose.onNodeWithContentDescription("Send").assertIsEnabled()
+    }
+
+    @Test
+    fun anExpandedComposerShowsStopInItsActionRowWhileRunning() {
+        showOpenChat(running = true)
+
+        compose.onNodeWithTag("composer").requestFocus()
+        compose.waitForIdle()
+
+        assertBelowTheField(compose.onNodeWithContentDescription("Stop"))
+        compose.onNodeWithContentDescription("Stop").performClick()
+        compose.waitUntil(10_000) { peer.calls.any { it.first == "session.interrupt" } }
+    }
+
+    @Test
+    fun theLastMessageIsNotCoveredByTheComposerAtTheEnd() {
+        showLongChat(6)
+        val last = compose.onNode(hasText("Reply 6 paragraph 6", substring = true))
+        assertTrue("${last.bounds()} ends above the composer ${compose.onNodeWithTag("composer-box").bounds()}", last.bounds().bottom <= compose.onNodeWithTag("composer-box").bounds().top)
+
+        compose.onNodeWithTag("composer").performTextInput("one\ntwo\nthree")
+        compose.waitForIdle()
+
+        assertTrue("${last.bounds()} ends above the grown composer ${compose.onNodeWithTag("composer-box").bounds()}", last.bounds().bottom <= compose.onNodeWithTag("composer-box").bounds().top)
+    }
+
+    @Test
+    fun theMessagesScrollUnderneathTheComposer() {
+        showLongChat(6)
+
+        assertTrue(compose.onNodeWithTag("messages").bounds().bottom > compose.onNodeWithTag("composer-box").bounds().top)
+    }
+
+    @Test
+    fun scrollToEndIsHiddenAtTheEndAndShownAfterScrollingUp() {
+        showLongChat(6)
+        compose.onNodeWithContentDescription("Scroll to end").assertDoesNotExist()
+
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+
+        val button = compose.onNodeWithContentDescription("Scroll to end")
+        button.assertIsDisplayed()
+        val composer = compose.onNodeWithTag("composer-box").bounds()
+        assertTrue("${button.bounds()} is just above the composer $composer", button.bounds().bottom <= composer.top && button.bounds().bottom > composer.top - 48f)
+        assertEquals("centred", composer.center.x, button.bounds().center.x, 1f)
+
+        compose.onNodeWithTag("messages").performTouchInput { swipeUp() }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Scroll to end").assertDoesNotExist()
+    }
+
+    @Test
+    fun scrollToEndGoesToTheEndAndFollowsItAgain() {
+        showLongChat(6)
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        peer.event("message.start")
+        peer.event("message.delta", textPayload(longReply(1, 3)))
+        compose.waitForIdle()
+        compose.onNode(hasText("Reply 7 paragraph 3 says", substring = true)).assertDoesNotExist()
+
+        compose.onNodeWithContentDescription("Scroll to end").performClick()
+        compose.waitForIdle()
+
+        compose.onNode(hasText("Reply 7 paragraph 3 says", substring = true)).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Scroll to end").assertDoesNotExist()
+
+        peer.event("message.delta", textPayload("\n\n" + longReply(4, 30)))
+        compose.waitForIdle()
+        compose.onNode(hasText("Reply 7 paragraph 30 says", substring = true)).assertIsDisplayed()
     }
 }

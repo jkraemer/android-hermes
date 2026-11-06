@@ -1,5 +1,10 @@
 package net.jkraemer.hermes.chat
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
@@ -7,6 +12,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -15,11 +22,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -30,7 +38,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -40,6 +47,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -48,10 +57,15 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -63,6 +77,7 @@ import net.jkraemer.hermes.core.chat.ChatItem
 import net.jkraemer.hermes.core.chat.ToolCall
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.sessions.ScheduleIcon
+import net.jkraemer.hermes.sessions.pathIcon
 import java.time.Instant
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
@@ -111,19 +126,23 @@ fun ChatScreen(
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
-        bottomBar = {
+    ) { padding ->
+        // The composer floats over the end of the chat, which scrolls underneath it.
+        val density = LocalDensity.current
+        var composerHeight by remember { mutableStateOf(0.dp) }
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                if (!ready) ReconnectingBanner(onRetryConnect)
+                else if (openFailed && chat.liveSessionId == null) OpenFailedBanner(viewModel::retryOpen)
+                Messages(chat.items, cron, viewModel, clock, composerHeight, Modifier.weight(1f))
+            }
             Composer(
                 running = chat.running,
                 canSend = ready && chat.liveSessionId != null,
                 onSend = viewModel::send,
                 onStop = viewModel::interrupt,
+                modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
             )
-        },
-    ) { padding ->
-        Column(Modifier.padding(padding).fillMaxSize()) {
-            if (!ready) ReconnectingBanner(onRetryConnect)
-            else if (openFailed && chat.liveSessionId == null) OpenFailedBanner(viewModel::retryOpen)
-            Messages(chat.items, cron, viewModel, clock, Modifier.weight(1f))
         }
     }
 }
@@ -148,16 +167,39 @@ private fun OpenFailedBanner(onRetry: () -> Unit) {
     }
 }
 
+/** [composerHeight] is how much of the list's bottom the composer covers; the last message ends above it. */
 @Composable
-private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatViewModel, clock: () -> Instant, modifier: Modifier) {
+private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatViewModel, clock: () -> Instant, composerHeight: Dp, modifier: Modifier) {
     val listState = rememberLazyListState()
     val parsedReplies by viewModel.parsedReplies.collectAsStateWithLifecycle()
-    FollowTheEnd(listState)
+    val following = remember { mutableStateOf(true) }
+    FollowTheEnd(listState, following)
+    val awayFromTheEnd by remember { derivedStateOf { !following.value && listState.canScrollForward } }
     val jobPromptIndex = if (cron) chatItems.indexOfFirst { it is ChatItem.User } else -1
+    Box(modifier.fillMaxWidth()) {
+        MessageList(chatItems, jobPromptIndex, parsedReplies, viewModel, clock, listState, composerHeight)
+        ScrollToEndButton(
+            awayFromTheEnd,
+            onClick = { following.value = true },
+            Modifier.align(Alignment.BottomCenter).padding(bottom = composerHeight),
+        )
+    }
+}
+
+@Composable
+private fun MessageList(
+    chatItems: List<ChatItem>,
+    jobPromptIndex: Int,
+    parsedReplies: Map<String, State.Success>,
+    viewModel: ChatViewModel,
+    clock: () -> Instant,
+    listState: LazyListState,
+    composerHeight: Dp,
+) {
     LazyColumn(
-        modifier.fillMaxWidth().testTag("messages"),
+        Modifier.fillMaxSize().testTag("messages"),
         listState,
-        contentPadding = PaddingValues(16.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = composerHeight + 8.dp),
         verticalArrangement = spacedBy(16.dp),
     ) {
         // Items are only ever appended to a chat, so an item keeps its index.
@@ -170,6 +212,22 @@ private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatVi
                 is ChatItem.Clarify -> ClarifyCard(item, onSend = { viewModel.answerClarify(item.requestId, it) })
                 is ChatItem.Error -> Text(item.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
             }
+        }
+    }
+}
+
+/** A round down arrow, shown while the chat is away from its end; a tap goes back to the end and follows it again. */
+@Composable
+private fun ScrollToEndButton(visible: Boolean, onClick: () -> Unit, modifier: Modifier) {
+    AnimatedVisibility(visible, modifier, enter = fadeIn() + scaleIn(), exit = fadeOut() + scaleOut()) {
+        Surface(
+            onClick,
+            Modifier.size(40.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            shadowElevation = 2.dp,
+        ) {
+            Box(contentAlignment = Alignment.Center) { Icon(ArrowDownwardIcon, contentDescription = "Scroll to end", Modifier.size(20.dp)) }
         }
     }
 }
@@ -188,18 +246,17 @@ private fun Reply(reply: ChatItem.Assistant, parsed: State.Success?) {
 }
 
 /**
- * Keeps the end of the chat in view while it is followed: whenever the list could scroll further, because an item
+ * Keeps the end of the chat in view while it is [following]: whenever the list could scroll further, because an item
  * was added, a reply grew, a reply was laid out anew once its Markdown was parsed, or the list got less room. Following
  * the layout rather than the items matters when much arrives at once, as after a reconnect: the reply's new text is
  * laid out a few frames after it arrives. Scrolling away from the end stops following; scrolling back resumes it.
  */
 @Composable
-private fun FollowTheEnd(listState: LazyListState) {
-    var following by remember { mutableStateOf(true) }
+private fun FollowTheEnd(listState: LazyListState, following: MutableState<Boolean>) {
     LaunchedEffect(listState) {
         // Scrolling to the end happens in here, so this never sees its own scrolls in progress, only the user's.
-        snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward, following) }.collect { (scrolling, canScrollForward, follow) ->
-            if (scrolling) following = !canScrollForward
+        snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward, following.value) }.collect { (scrolling, canScrollForward, follow) ->
+            if (scrolling) following.value = !canScrollForward
             else if (follow && canScrollForward) scrollToEnd(listState)
         }
     }
@@ -275,31 +332,83 @@ private fun ToolLine(calls: List<ToolCall>) {
     }
 }
 
+/**
+ * The message field with send, or stop while a turn runs. Empty and unfocused it is one pill; focused or holding text
+ * it is a card with the field above a row of actions, whose start [leading] fills.
+ */
 @Composable
-private fun Composer(running: Boolean, canSend: Boolean, onSend: (String) -> Unit, onStop: () -> Unit) {
+private fun Composer(
+    running: Boolean,
+    canSend: Boolean,
+    onSend: (String) -> Unit,
+    onStop: () -> Unit,
+    modifier: Modifier = Modifier,
+    leading: @Composable RowScope.() -> Unit = {},
+) {
     var text by rememberSaveable { mutableStateOf("") }
-    Surface(color = MaterialTheme.colorScheme.surface) {
-        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = spacedBy(8.dp)) {
-            OutlinedTextField(
-                text, { text = it },
-                Modifier.weight(1f).testTag("composer"),
-                placeholder = { Text("Message Hermes") },
-                maxLines = 6,
-                shape = RoundedCornerShape(24.dp),
-            )
-            if (running) {
-                FilledIconButton(onStop, Modifier.semantics { contentDescription = "Stop" }) {
-                    Box(Modifier.size(14.dp).background(LocalContentColor.current, RoundedCornerShape(2.dp)))
+    var focused by remember { mutableStateOf(false) }
+    val expanded = focused || text.isNotEmpty()
+    val sendOrStop = @Composable {
+        if (running) {
+            FilledIconButton(onStop, Modifier.semantics { contentDescription = "Stop" }) {
+                Box(Modifier.size(14.dp).background(LocalContentColor.current, RoundedCornerShape(2.dp)))
+            }
+        } else {
+            FilledIconButton(
+                onClick = {
+                    onSend(text.trim())
+                    text = ""
+                },
+                enabled = canSend && text.isNotBlank(),
+            ) { Icon(ArrowUpwardIcon, contentDescription = "Send") }
+        }
+    }
+    Surface(
+        modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("composer-box"),
+        shape = if (expanded) RoundedCornerShape(24.dp) else CircleShape,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        // The field has the same place in both shapes, so it keeps its focus as the composer expands.
+        Column(Modifier.padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                MessageField(
+                    text,
+                    onTextChange = { text = it },
+                    Modifier.weight(1f).padding(vertical = if (expanded) 8.dp else 0.dp).onFocusChanged { focused = it.isFocused },
+                )
+                if (!expanded) sendOrStop()
+            }
+            if (expanded) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    leading()
+                    Spacer(Modifier.weight(1f))
+                    sendOrStop()
                 }
-            } else {
-                FilledIconButton(
-                    onClick = {
-                        onSend(text.trim())
-                        text = ""
-                    },
-                    enabled = canSend && text.isNotBlank(),
-                ) { Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send") }
             }
         }
     }
 }
+
+/** Grows with its text up to six lines, then scrolls. */
+@Composable
+private fun MessageField(text: String, onTextChange: (String) -> Unit, modifier: Modifier) {
+    val style = MaterialTheme.typography.bodyLarge
+    BasicTextField(
+        text,
+        onTextChange,
+        modifier.testTag("composer"),
+        textStyle = style.copy(color = MaterialTheme.colorScheme.onSurface),
+        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+        maxLines = 6,
+        decorationBox = { field ->
+            Box(contentAlignment = Alignment.CenterStart) {
+                if (text.isEmpty()) Text("Message Hermes", style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                field()
+            }
+        },
+    )
+}
+
+// The Material "arrow upward" and "arrow downward" icons, which material-icons-core does not have.
+private val ArrowUpwardIcon = pathIcon("ArrowUpward", "M4,12l1.41,1.41L11,7.83V20h2V7.83l5.58,5.59L20,12l-8,-8 -8,8z")
+private val ArrowDownwardIcon = pathIcon("ArrowDownward", "M20,12l-1.41,-1.41L13,16.17V4h-2v12.17l-5.58,-5.59L4,12l8,8 8,-8z")
