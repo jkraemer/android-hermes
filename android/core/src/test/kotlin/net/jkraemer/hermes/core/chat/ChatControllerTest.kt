@@ -43,6 +43,9 @@ private class FakePeer : RpcPeer {
     override val serverRequests = MutableSharedFlow<RpcFrame.ServerRequest>(extraBufferCapacity = 64)
 
     val calls: MutableList<Pair<String, JsonObject>> = CopyOnWriteArrayList()
+
+    /** The `config.get` calls, kept apart because the controller makes them on every Ready. */
+    val configCalls: MutableList<JsonObject> = CopyOnWriteArrayList()
     val answers = mutableListOf<Pair<String, JsonObject>>()
     private val handlers = ConcurrentHashMap<String, suspend (JsonObject) -> JsonElement>()
 
@@ -59,7 +62,7 @@ private class FakePeer : RpcPeer {
     fun on(method: String, result: String) = on(method) { Json.parseToJsonElement(result) }
 
     override suspend fun call(method: String, params: JsonObject, timeoutMs: Long): JsonElement {
-        calls += method to params
+        if (method == "config.get") configCalls += params else calls += method to params
         return (handlers[method] ?: error("unscripted call $method"))(params)
     }
 
@@ -96,6 +99,96 @@ class ChatControllerTest {
             val peer = FakePeer()
             block(peer, ChatController(peer, backgroundScope, log = { logLines += it }) { NOW })
         }
+
+    /** Like [test], but [setUp] scripts the peer before the controller sees the connection ready. */
+    private fun testWith(setUp: (FakePeer) -> Unit, block: suspend kotlinx.coroutines.test.TestScope.(FakePeer, ChatController) -> Unit) =
+        runTest(UnconfinedTestDispatcher()) {
+            val peer = FakePeer().also(setUp)
+            block(peer, ChatController(peer, backgroundScope) { NOW })
+        }
+
+    private fun approvalRequest(extraParams: String = "") = RpcFrame.ServerRequest(
+        "srq-1", "approval", obj("""{"session_id":"live1","request_id":"r1","command":"ls"$extraParams}"""),
+    )
+
+    private fun deadlineAfterApprovalRequest(peer: FakePeer, chat: ChatController, extraParams: String = ""): Instant {
+        peer.on("session.create", resumeResult())
+        runBlocking { chat.startNew() }
+        peer.serverRequests.tryEmit(approvalRequest(extraParams))
+        return (chat.state.value.items.single() as ChatItem.Approval).deadline
+    }
+
+    @Test fun approvalDeadlineUsesTheServersConfiguredTimeout() = testWith({ peer ->
+        peer.on("config.get", """{"config":{"approvals":{"mode":"manual","timeout":120},"other":{"x":1}}}""")
+    }) { peer, chat ->
+        assertEquals(listOf(obj("""{"key":"full"}""")), peer.configCalls)
+        assertEquals(NOW.plusSeconds(120), deadlineAfterApprovalRequest(peer, chat))
+    }
+
+    @Test fun approvalTimeoutInTheRequestWinsOverTheConfiguredOne() = testWith({ peer ->
+        peer.on("config.get", """{"config":{"approvals":{"timeout":120}}}""")
+    }) { peer, chat ->
+        assertEquals(NOW.plusSeconds(45), deadlineAfterApprovalRequest(peer, chat, ""","timeout_s":45"""))
+    }
+
+    @Test fun approvalTimeoutFallsBackTo300WhenTheConfigCallFails() = testWith({ peer ->
+        peer.on("config.get") { throw IOException("dropped") }
+    }) { peer, chat ->
+        assertEquals(NOW.plusSeconds(300), deadlineAfterApprovalRequest(peer, chat))
+    }
+
+    @Test fun approvalTimeoutFallsBackTo300WhenTheServerRefusesTheConfigCall() = testWith({ peer ->
+        peer.on("config.get") { throw RpcException(RpcError(5000, "nope")) }
+    }) { peer, chat ->
+        assertEquals(NOW.plusSeconds(300), deadlineAfterApprovalRequest(peer, chat))
+    }
+
+    @Test fun approvalTimeoutFallsBackTo300WhenTheConfigHasNoUsableValue() {
+        for (config in listOf(
+            """{"config":{}}""",
+            """{"config":{"approvals":{}}}""",
+            """{"config":{"approvals":{"timeout":"soon"}}}""",
+            """{"config":{"approvals":{"timeout":0}}}""",
+            """{"config":{"approvals":{"timeout":-5}}}""",
+            """{"config":{"approvals":null}}""",
+            """{"config":"x"}""",
+            """{}""",
+        )) {
+            testWith({ it.on("config.get", config) }) { peer, chat ->
+                assertEquals(config, NOW.plusSeconds(300), deadlineAfterApprovalRequest(peer, chat))
+            }
+        }
+    }
+
+    @Test fun approvalTimeoutIsReadAgainWhenTheConnectionBecomesReadyAgain() = testWith({ peer ->
+        peer.on("config.get", """{"config":{"approvals":{"timeout":60}}}""")
+    }) { peer, chat ->
+        peer.on("config.get", """{"config":{"approvals":{"timeout":90}}}""")
+
+        dropConnection(peer)
+
+        assertEquals(2, peer.configCalls.size)
+        assertEquals(NOW.plusSeconds(90), deadlineAfterApprovalRequest(peer, chat))
+    }
+
+    @Test fun approvalTimeoutGoesBackTo300WhenTheConfigCannotBeReadAgain() = testWith({ peer ->
+        peer.on("config.get", """{"config":{"approvals":{"timeout":60}}}""")
+    }) { peer, chat ->
+        peer.on("config.get") { throw IOException("dropped") }
+
+        dropConnection(peer)
+
+        assertEquals(NOW.plusSeconds(300), deadlineAfterApprovalRequest(peer, chat))
+    }
+
+    @Test fun approvalTimeoutUsesTheConfiguredValueForReplayedRequestsToo() = testWith({ peer ->
+        peer.on("config.get", """{"config":{"approvals":{"timeout":120}}}""")
+    }) { peer, chat ->
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST]"))
+        chat.open("stored1")
+
+        assertEquals(NOW.plusSeconds(120), (chat.state.value.items.single() as ChatItem.Approval).deadline)
+    }
 
     @Test fun openFeedsTranscript() = test { peer, chat ->
         peer.on("session.resume", resumeResult("""[{"role":"user","text":"hi"},{"role":"assistant","text":"yo"}]"""))

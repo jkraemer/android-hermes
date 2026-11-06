@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonObject
 import net.jkraemer.hermes.core.rpc.RpcFrame
 import java.time.Instant
 
+/** Used when neither the request nor the server's config says how long Hermes waits for an answer. */
 const val APPROVAL_TIMEOUT_SECONDS = 300L
 
 enum class ApprovalChoice(val wire: String) { ONCE("once"), SESSION("session"), ALWAYS("always"), DENY("deny") }
@@ -60,7 +61,12 @@ sealed interface ChatInput {
     data class Transcript(val messages: List<JsonObject>, val running: Boolean) : ChatInput
     data class UserSent(val text: String) : ChatInput
     data class Event(val event: RpcFrame.Event) : ChatInput
-    data class Request(val request: RpcFrame.ServerRequest, val receivedAt: Instant) : ChatInput
+    data class Request(
+        val request: RpcFrame.ServerRequest,
+        val receivedAt: Instant,
+        /** How long Hermes waits for an approval whose request does not say. */
+        val approvalTimeoutSeconds: Long = APPROVAL_TIMEOUT_SECONDS,
+    ) : ChatInput
     data class Answered(val requestId: String, val label: String) : ChatInput
 
     /** The ids of the server requests Hermes reports as still unanswered. */

@@ -18,6 +18,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.longOrNull
@@ -61,6 +62,9 @@ class ChatController(
     /** The server process' replay numbering; a different value means the server restarted. */
     private var epoch: String? = null
 
+    /** How long Hermes waits for an approval, as the server's config says; read on every Ready. */
+    @Volatile private var approvalTimeoutSeconds = APPROVAL_TIMEOUT_SECONDS
+
     private val collectors: List<Job>
     private var resync: Job? = null
 
@@ -70,7 +74,7 @@ class ChatController(
             scope.launch(start = CoroutineStart.UNDISPATCHED) {
                 peer.serverRequests.collect { request ->
                     synchronized(lock) {
-                        if (_state.value.liveSessionId != null) feed(ChatInput.Request(request, clock()))
+                        if (_state.value.liveSessionId != null) feed(requestInput(request))
                     }
                 }
             },
@@ -80,13 +84,16 @@ class ChatController(
                     if (connection == ConnectionState.Connecting) {
                         dropped = true
                         resync?.cancel()
-                    } else if (connection == ConnectionState.Ready && dropped) {
-                        dropped = false
-                        // A cancelled resync must have released the hold before the next one takes it.
-                        val previous = resync
-                        resync = scope.launch {
-                            previous?.cancelAndJoin()
-                            resyncAfterDrop()
+                    } else if (connection == ConnectionState.Ready) {
+                        scope.launch { loadApprovalTimeout() }
+                        if (dropped) {
+                            dropped = false
+                            // A cancelled resync must have released the hold before the next one takes it.
+                            val previous = resync
+                            resync = scope.launch {
+                                previous?.cancelAndJoin()
+                                resyncAfterDrop()
+                            }
                         }
                     }
                 }
@@ -153,6 +160,27 @@ class ChatController(
         collectors.forEach { it.cancel() }
     }
 
+    private fun requestInput(request: RpcFrame.ServerRequest) =
+        ChatInput.Request(request, clock(), approvalTimeoutSeconds)
+
+    /**
+     * Hermes does not send the approval timeout with the request; `approvals.timeout` of its config
+     * is what it waits for. Only that value is read, the rest of the config is dropped. Anything
+     * unusable, a failed call included, means the default.
+     */
+    private suspend fun loadApprovalTimeout() {
+        val config = try {
+            peer.call("config.get", buildJsonObject { put("key", "full") }).jsonObject["config"]
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        val seconds = (((config as? JsonObject)?.get("approvals") as? JsonObject)?.get("timeout") as? JsonPrimitive)
+            ?.takeIf { !it.isString }?.doubleOrNull?.toLong()
+        approvalTimeoutSeconds = seconds?.takeIf { it > 0 } ?: APPROVAL_TIMEOUT_SECONDS
+    }
+
     private fun requireLiveSession(): String =
         checkNotNull(_state.value.liveSessionId) { "No chat session is open" }
 
@@ -208,13 +236,12 @@ class ChatController(
             val request = element as? JsonObject ?: continue
             val id = request.string("id") ?: continue
             ids += id
-            feed(ChatInput.Request(
+            feed(requestInput(
                 RpcFrame.ServerRequest(
                     id = id,
                     method = request.string("method") ?: continue,
                     params = request["params"] as? JsonObject ?: JsonObject(emptyMap()),
                 ),
-                clock(),
             ))
         }
         feed(ChatInput.OpenRequests(ids))

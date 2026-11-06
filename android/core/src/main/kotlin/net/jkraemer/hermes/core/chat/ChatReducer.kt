@@ -15,7 +15,7 @@ fun reduce(state: ChatState, input: ChatInput): ChatState = when (input) {
     is ChatInput.Transcript -> state.copy(items = transcriptItems(input.messages), running = input.running)
     is ChatInput.UserSent -> state.copy(items = state.items + ChatItem.User(input.text), running = true)
     is ChatInput.Event -> reduceEvent(state, input.event)
-    is ChatInput.Request -> reduceRequest(state, input.request, input.receivedAt)
+    is ChatInput.Request -> reduceRequest(state, input.request, input.receivedAt, input.approvalTimeoutSeconds)
     is ChatInput.Answered -> state.updateCard(input.requestId) { CardStatus.Answered(input.label) }
     is ChatInput.OpenRequests -> reconcileCards(state, input.ids)
 }
@@ -177,20 +177,20 @@ private fun completeTool(state: ChatState, payload: JsonObject): ChatState {
     })
 }
 
-private fun reduceRequest(state: ChatState, request: RpcFrame.ServerRequest, receivedAt: Instant): ChatState {
+private fun reduceRequest(state: ChatState, request: RpcFrame.ServerRequest, receivedAt: Instant, approvalTimeoutSeconds: Long): ChatState {
     val params = request.params
     val sessionId = params["session_id"].string()
     if (state.liveSessionId != null && sessionId != null && sessionId != state.liveSessionId) return state
     if (state.items.any { (it is ChatItem.Approval && it.requestId == request.id) || (it is ChatItem.Clarify && it.requestId == request.id) }) return state
     val item = when (request.method) {
-        "approval" -> approvalItem(request.id, params, receivedAt)
+        "approval" -> approvalItem(request.id, params, receivedAt, approvalTimeoutSeconds)
         "clarify" -> clarifyItem(request.id, params)
         else -> return state
     }
     return state.copy(items = state.items + item)
 }
 
-private fun approvalItem(requestId: String, params: JsonObject, receivedAt: Instant): ChatItem.Approval {
+private fun approvalItem(requestId: String, params: JsonObject, receivedAt: Instant, defaultTimeoutSeconds: Long): ChatItem.Approval {
     val offered = (params["choices"] as? JsonArray)?.mapNotNull { choice ->
         ApprovalChoice.entries.firstOrNull { it.wire == choice.string() }
     }
@@ -202,7 +202,7 @@ private fun approvalItem(requestId: String, params: JsonObject, receivedAt: Inst
             else -> true
         }
     }
-    val timeoutSeconds = (params["timeout_s"] as? JsonPrimitive)?.doubleOrNull?.toLong() ?: APPROVAL_TIMEOUT_SECONDS
+    val timeoutSeconds = (params["timeout_s"] as? JsonPrimitive)?.doubleOrNull?.toLong() ?: defaultTimeoutSeconds
     return ChatItem.Approval(
         requestId = requestId,
         approvalId = params["request_id"].string(),

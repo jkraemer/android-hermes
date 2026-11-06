@@ -56,6 +56,18 @@ class SessionsE2eTest {
     }
 
     @Test
+    fun lastAssistantTextIsTheSessionsReply() = runBlocking {
+        val app = connect()
+        val chat = app.newChat().also { it.startNew() }
+        chat.sendAndAwaitReply("Reply with exactly the word: pong", "pong")
+        val id = chat.state.value.storedSessionId!!
+
+        val reply = app.sessions.lastAssistantText(id)
+
+        assertTrue("reply was $reply", reply != null && reply.contains("pong", ignoreCase = true))
+    }
+
+    @Test
     fun appSessionIsVisibleToCli() = runBlocking {
         val app = connect()
         val chat = app.newChat().also { it.startNew() }

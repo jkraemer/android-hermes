@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.double
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
@@ -43,6 +44,17 @@ class RpcE2eTest {
         assertEquals(ConnectionState.Ready, rpc.state.value)
         rpc.call("ping")
         Unit
+    }
+
+    @Test
+    fun configGetFullCarriesTheApprovalTimeoutOfTheHarnessConfig() = runBlocking {
+        val rpc = connect()
+
+        val result = rpc.call("config.get", buildJsonObject { put("key", "full") }).jsonObject
+
+        val timeout = result.getValue("config").jsonObject.getValue("approvals").jsonObject.getValue("timeout").jsonPrimitive
+        assertFalse(timeout.isString)
+        assertEquals(300.0, timeout.double, 0.0)
     }
 
     @Test
