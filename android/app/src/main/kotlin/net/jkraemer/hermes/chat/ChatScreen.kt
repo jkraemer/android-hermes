@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
@@ -59,15 +61,18 @@ import com.mikepenz.markdown.m3.Markdown
 import net.jkraemer.hermes.core.chat.ChatItem
 import net.jkraemer.hermes.core.chat.ToolCall
 import net.jkraemer.hermes.core.rpc.ConnectionState
+import net.jkraemer.hermes.sessions.ScheduleIcon
 import java.time.Instant
 
 /**
+ * [cron] is whether this chat is a cron run, whose first message is the job's prompt and is shown collapsed.
  * [onOpenMenu] opens the navigation drawer, [onNewChat] starts another chat.
  * [onStoredSessionId] reports the stored id a new chat got, so the app can track the chat under it. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
+    cron: Boolean,
     onOpenMenu: () -> Unit,
     onNewChat: () -> Unit,
     onRetryConnect: () -> Unit,
@@ -114,7 +119,7 @@ fun ChatScreen(
         Column(Modifier.padding(padding).fillMaxSize()) {
             if (!ready) ReconnectingBanner(onRetryConnect)
             else if (openFailed && chat.liveSessionId == null) OpenFailedBanner(viewModel::retryOpen)
-            Messages(chat.items, viewModel, clock, Modifier.weight(1f))
+            Messages(chat.items, cron, viewModel, clock, Modifier.weight(1f))
         }
     }
 }
@@ -140,9 +145,10 @@ private fun OpenFailedBanner(onRetry: () -> Unit) {
 }
 
 @Composable
-private fun Messages(chatItems: List<ChatItem>, viewModel: ChatViewModel, clock: () -> Instant, modifier: Modifier) {
+private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatViewModel, clock: () -> Instant, modifier: Modifier) {
     val listState = rememberLazyListState()
     FollowTheEnd(listState, chatItems)
+    val jobPromptIndex = if (cron) chatItems.indexOfFirst { it is ChatItem.User } else -1
     LazyColumn(
         modifier.fillMaxWidth().testTag("messages"),
         listState,
@@ -151,7 +157,7 @@ private fun Messages(chatItems: List<ChatItem>, viewModel: ChatViewModel, clock:
     ) {
         items(chatItems.size) { index ->
             when (val item = chatItems[index]) {
-                is ChatItem.User -> UserBubble(item.text)
+                is ChatItem.User -> if (index == jobPromptIndex) JobPrompt(item.text) else UserBubble(item.text)
                 is ChatItem.Assistant -> Markdown(item.markdown, modifier = Modifier.fillMaxWidth())
                 is ChatItem.Tools -> ToolLine(item.calls)
                 is ChatItem.Approval -> ApprovalCard(item, clock, onChoose = { viewModel.answerApproval(item.requestId, it) })
@@ -200,6 +206,26 @@ private fun UserBubble(text: String) {
         ) {
             Text(text, Modifier.padding(horizontal = 14.dp, vertical = 10.dp), style = MaterialTheme.typography.bodyLarge)
         }
+    }
+}
+
+/** The prompt a cron job ran with: one muted line, and a tap shows the whole text. */
+@Composable
+private fun JobPrompt(text: String) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(Modifier.fillMaxWidth().clickable { expanded = !expanded }.testTag("job-prompt"), verticalArrangement = spacedBy(4.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = spacedBy(8.dp)) {
+            Icon(ScheduleIcon, contentDescription = null, Modifier.size(16.dp), tint = muted)
+            Text("Scheduled job prompt", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = muted)
+            Icon(
+                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                Modifier.size(20.dp),
+                tint = muted,
+            )
+        }
+        if (expanded) Text(text, style = MaterialTheme.typography.bodySmall, color = muted)
     }
 }
 

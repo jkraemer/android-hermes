@@ -90,8 +90,8 @@ private val Bucket.title: String
     }
 
 /**
- * [onOpenMenu] opens the navigation drawer, [onOpenChat] gets the stored session id and its title,
- * or nulls for a new chat. [clock] decides how recent "ago" is.
+ * [onOpenMenu] opens the navigation drawer, [onOpenChat] gets the stored session id, its title and whether
+ * it is a cron run, or nulls for a new chat. [clock] decides how recent "ago" is.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -99,7 +99,7 @@ fun SessionListScreen(
     viewModel: SessionListViewModel,
     host: String,
     onOpenMenu: () -> Unit,
-    onOpenChat: (id: String?, title: String?) -> Unit,
+    onOpenChat: (id: String?, title: String?, cron: Boolean) -> Unit,
     onNotLoggedIn: () -> Unit,
     onRetryConnect: () -> Unit,
     clock: Clock = Clock.systemDefaultZone(),
@@ -150,7 +150,7 @@ fun SessionListScreen(
                         val results = state.results
                         if (results != null) {
                             items(results, key = { it.session.id }) { hit ->
-                                SearchResultRow(hit, onOpen = { onOpenChat(hit.session.id, hit.session.title) })
+                                SearchResultRow(hit, onOpen = { onOpenChat(hit.session.id, hit.session.title, hit.session.isCron) })
                             }
                         } else {
                             items(
@@ -162,7 +162,7 @@ fun SessionListScreen(
                                     is TimelineItem.Row -> SessionRow(
                                         item,
                                         time = formatSessionTime(item.session.lastActive, clock.instant(), clock.zone, locale),
-                                        onOpen = { onOpenChat(item.session.id, item.session.title) },
+                                        onOpen = { onOpenChat(item.session.id, item.session.title, item.session.isCron) },
                                         onRename = { viewModel.rename(item.session.id, it) },
                                         onSetPinned = { viewModel.setPinned(item.session.id, it) },
                                         onArchive = { viewModel.archive(item.session.id) },
@@ -181,7 +181,7 @@ fun SessionListScreen(
                     Modifier.align(Alignment.BottomStart).navigationBarsPadding().padding(16.dp).size(BUTTON_SIZE),
                 ) { Icon(Icons.Filled.Search, contentDescription = "Search") }
                 FilledIconButton(
-                    { onOpenChat(null, null) },
+                    { onOpenChat(null, null, false) },
                     Modifier.align(Alignment.BottomEnd).navigationBarsPadding().padding(16.dp).size(BUTTON_SIZE),
                 ) { Icon(Icons.Filled.Add, contentDescription = "New chat") }
             }

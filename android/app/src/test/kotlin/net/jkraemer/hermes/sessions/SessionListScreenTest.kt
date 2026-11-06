@@ -102,6 +102,7 @@ class SessionListScreenTest {
     private val source = FakeSource()
     private val needsAnswer = MutableStateFlow(emptySet<String>())
     private val opened = mutableListOf<Pair<String?, String?>>()
+    private val openedCron = mutableListOf<Boolean>()
     private var loggedOut = 0
     private var reconnects = 0
     private var menus = 0
@@ -125,7 +126,10 @@ class SessionListScreenTest {
                     viewModel, host = "hermes.example.ts.net",
                     onOpenMenu = { menus++ },
                     clock = clock,
-                    onOpenChat = { id, title -> opened += id to title },
+                    onOpenChat = { id, title, cron ->
+                        opened += id to title
+                        openedCron += cron
+                    },
                     onNotLoggedIn = { loggedOut++ },
                     onRetryConnect = { reconnects++ },
                 )
@@ -453,6 +457,25 @@ class SessionListScreenTest {
         waitForText("Morning briefing")
         compose.onNodeWithText("Morning briefing").performClick()
         assertEquals(listOf<Pair<String?, String?>>("a" to "Morning briefing"), opened)
+    }
+
+    @Test
+    fun tappingACronRowOpensItAsACronChat() {
+        show(session("a", title = "Nightly", source = "cron"))
+        waitForText("Nightly")
+        compose.onNodeWithText("Nightly").performClick()
+        assertEquals(listOf(true), openedCron)
+    }
+
+    @Test
+    fun tappingASearchHitOnACronRunOpensItAsACronChat() {
+        source.searchResults = listOf(hit(session("hit", title = "Nightly run", source = "cron")))
+        show(session("a", title = "Morning briefing"))
+        openSearch()
+        compose.onNodeWithTag("search").performTextInput("nightly")
+        waitForText("Nightly run")
+        compose.onNodeWithText("Nightly run").performClick()
+        assertEquals(listOf(true), openedCron)
     }
 
     @Test

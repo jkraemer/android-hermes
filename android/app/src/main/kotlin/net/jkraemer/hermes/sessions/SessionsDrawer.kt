@@ -26,14 +26,14 @@ import net.jkraemer.hermes.core.timeline.TimelineItem
 
 /**
  * The navigation drawer: the app name with search and new chat, the pinned sessions, the newest
- * others, and a link to the full list. [onOpenChat] gets the stored session id and its title.
+ * others, and a link to the full list. [onOpenChat] gets the stored session id, its title and whether it is a cron run.
  */
 @Composable
 fun SessionsDrawerContent(
     entries: DrawerEntries,
     onSearch: () -> Unit,
     onNewChat: () -> Unit,
-    onOpenChat: (id: String, title: String?) -> Unit,
+    onOpenChat: (id: String, title: String?, cron: Boolean) -> Unit,
     onViewAll: () -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize()) {
@@ -77,9 +77,9 @@ private fun DrawerHeading(text: String) {
 }
 
 @Composable
-private fun DrawerEntry(row: TimelineItem.Row, onOpenChat: (id: String, title: String?) -> Unit) {
+private fun DrawerEntry(row: TimelineItem.Row, onOpenChat: (id: String, title: String?, cron: Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable { onOpenChat(row.session.id, row.session.title) }
+        Modifier.fillMaxWidth().clickable { onOpenChat(row.session.id, row.session.title, row.session.isCron) }
             .padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

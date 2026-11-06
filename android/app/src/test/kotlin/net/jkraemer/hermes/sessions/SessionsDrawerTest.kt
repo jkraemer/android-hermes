@@ -35,6 +35,7 @@ class SessionsDrawerTest {
     private val newChats = mutableListOf<Unit>()
     private val viewAlls = mutableListOf<Unit>()
     private val opened = mutableListOf<Pair<String, String?>>()
+    private val openedCron = mutableListOf<Boolean>()
 
     private fun show(sessions: List<net.jkraemer.hermes.core.sessions.SessionSummary>) {
         source.sessions = sessions
@@ -50,7 +51,10 @@ class SessionsDrawerTest {
                     state.drawer,
                     onSearch = { searches += Unit },
                     onNewChat = { newChats += Unit },
-                    onOpenChat = { id, title -> opened += id to title },
+                    onOpenChat = { id, title, cron ->
+                        opened += id to title
+                        openedCron += cron
+                    },
                     onViewAll = { viewAlls += Unit },
                 )
             }
@@ -127,5 +131,14 @@ class SessionsDrawerTest {
         waitForText("Chat title")
         compose.onNodeWithText("Chat title").performClick()
         assertEquals(listOf<Pair<String, String?>>("a" to "Chat title"), opened)
+    }
+
+    @Test
+    fun tappingACronEntryOpensItAsACronChat() {
+        show(listOf(session("a", title = "Chat title"), session("b", title = "Nightly run", source = "cron", lastActive = NOW.minusSeconds(120))))
+        waitForText("Nightly run")
+        compose.onNodeWithText("Nightly run").performClick()
+        compose.onNodeWithText("Chat title").performClick()
+        assertEquals(listOf(true, false), openedCron)
     }
 }

@@ -50,7 +50,7 @@ class ChatScreenTest {
     private lateinit var viewModel: ChatViewModel
     private lateinit var seenStore: SeenStore
 
-    private fun show(storedSessionId: String? = "stored1", title: String? = "Morning briefing") {
+    private fun show(storedSessionId: String? = "stored1", title: String? = "Morning briefing", cron: Boolean = false) {
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-test", Context.MODE_PRIVATE)
         seenStore = SeenStore(prefs)
         viewModel = ChatViewModel(peer, storedSessionId, title, needsAnswer, seenStore) { NOW }
@@ -58,6 +58,7 @@ class ChatScreenTest {
             MaterialTheme {
                 ChatScreen(
                     viewModel,
+                    cron = cron,
                     onOpenMenu = { menus++ },
                     onNewChat = { newChats++ },
                     onRetryConnect = { reconnects++ },
@@ -70,6 +71,44 @@ class ChatScreenTest {
 
     private fun waitForText(text: String) = compose.waitUntil(10_000) {
         compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+    }
+
+    private val promptTranscript = """{"session_id":"live1","stored_session_id":"stored1","messages":[
+        {"role":"user","text":"/attention-check"},{"role":"assistant","text":"All quiet."},{"role":"user","text":"thanks"}
+        ],"running":false,"open_requests":[]}"""
+
+    @Test
+    fun cronChatCollapsesTheJobPromptAndExpandsItOnTap() {
+        peer.resume = promptTranscript
+        show(cron = true)
+
+        waitForText("Scheduled job prompt")
+        compose.onNodeWithText("/attention-check").assertDoesNotExist()
+        compose.onNodeWithText("All quiet.").assertIsDisplayed()
+
+        compose.onNodeWithText("Scheduled job prompt").performClick()
+        compose.onNodeWithText("/attention-check").assertIsDisplayed()
+
+        compose.onNodeWithText("Scheduled job prompt").performClick()
+        compose.onNodeWithText("/attention-check").assertDoesNotExist()
+    }
+
+    @Test
+    fun cronChatShowsLaterUserMessagesAsBubbles() {
+        peer.resume = promptTranscript
+        show(cron = true)
+
+        waitForText("thanks")
+        compose.onAllNodesWithText("Scheduled job prompt").assertCountEquals(1)
+    }
+
+    @Test
+    fun otherChatShowsTheFirstUserMessageAsABubble() {
+        peer.resume = promptTranscript
+        show()
+
+        waitForText("/attention-check")
+        compose.onNodeWithText("Scheduled job prompt").assertDoesNotExist()
     }
 
     @Test

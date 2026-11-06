@@ -36,12 +36,14 @@ sealed interface Screen {
      * [storedSessionId] null starts a new chat; [title] is the one the session list showed. [fromList]
      * is the list back returns to, if the chat was opened from one. [key] tells chats apart, so
      * opening another chat from a chat gets a fresh controller; it is kept when a new chat learns its id.
+     * [cron] is whether the session is a cron run, whose first message is the job's prompt.
      */
     data class Chat(
         val storedSessionId: String?,
         val title: String? = null,
         val fromList: Sessions? = null,
         val key: String = UUID.randomUUID().toString(),
+        val cron: Boolean = false,
     ) : Screen
 }
 

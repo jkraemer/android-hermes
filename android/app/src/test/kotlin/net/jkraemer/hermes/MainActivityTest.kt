@@ -38,6 +38,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 
+private const val CRON_TRANSCRIPT = """[{"role":"user","text":"/attention-check"},{"role":"assistant","text":"All quiet."}]"""
+
 @RunWith(RobolectricTestRunner::class)
 class MainActivityTest {
     @get:Rule val compose = createEmptyComposeRule()
@@ -50,7 +52,7 @@ class MainActivityTest {
     private fun rpcCalls(method: String) = rpcCalls.filter { it.first == method }.map { it.second }
 
     /** A gateway that is ready at once, answers every request, and opens whatever session it is asked for. */
-    private inner class FakeGateway : WebSocketListener() {
+    private inner class FakeGateway(private val transcript: String = "[]") : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
             webSocket.send("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"e1"}}}""")
         }
@@ -63,7 +65,7 @@ class MainActivityTest {
             val stored = params["session_id"]?.jsonPrimitive?.content ?: "new-${rpcCalls.size}"
             val result = when (method) {
                 "session.resume", "session.create" ->
-                    """{"session_id":"live-$stored","stored_session_id":"$stored","messages":[],"running":false,"open_requests":[]}"""
+                    """{"session_id":"live-$stored","stored_session_id":"$stored","messages":$transcript,"running":false,"open_requests":[]}"""
                 else -> "{}"
             }
             webSocket.send("""{"jsonrpc":"2.0","id":${frame.getValue("id")},"result":$result}""" + "\n")
@@ -76,12 +78,12 @@ class MainActivityTest {
     }
 
     /** Points the app at a fake server whose `api/auth/me` answers with [me]; everything else is a 404. */
-    private fun serverAnswering(me: Int, wsTicket: Int = 404, sessions: String? = null, gateway: Boolean = false) {
+    private fun serverAnswering(me: Int, wsTicket: Int = 404, sessions: String? = null, gateway: Boolean = false, transcript: String = "[]") {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 if (request.path?.startsWith("/api/sessions?") == true && sessions != null) return MockResponse().setBody(sessions)
                 if (gateway && request.path == "/api/auth/ws-ticket") return MockResponse().setBody("""{"ticket":"t"}""")
-                if (gateway && request.path?.startsWith("/api/ws") == true) return MockResponse().withWebSocketUpgrade(FakeGateway())
+                if (gateway && request.path?.startsWith("/api/ws") == true) return MockResponse().withWebSocketUpgrade(FakeGateway(transcript))
                 return MockResponse().setResponseCode(
                     when (request.path) {
                         "/api/auth/me" -> me
@@ -130,7 +132,7 @@ class MainActivityTest {
         val now = System.currentTimeMillis() / 1000.0
         return rows.withIndex().joinToString(",", """{"sessions":[""", """],"total":${rows.size}}""") { (index, row) ->
             val (title, source) = row
-            """{"id":"id-$title","title":"$title","source":"$source","started_at":${now - 90 - index * 60},"last_active":${now - 60 - index * 60}}"""
+            """{"id":"id-$title","title":"$title","source":"$source","started_at":${now - 90 - index * 60},"message_count":2,"last_active":${now - 60 - index * 60}}"""
         }
     }
 
@@ -398,11 +400,50 @@ class MainActivityTest {
         val list = Screen.Sessions(back = home)
         val fromList = Screen.Chat("id:with:colons", "A \u001f title", fromList = list, key = "k")
         assertEquals(fromList, restore(fromList))
+        val cron = Screen.Chat("cron1", "Nightly", cron = true, key = "c")
+        assertEquals(cron, restore(cron))
         assertEquals(Screen.Chat(null, null, null, "k"), restore(Screen.Chat(null, null, null, "k")))
         assertEquals(list, restore(list))
         assertEquals(Screen.Sessions(), restore(Screen.Sessions()))
         assertEquals(Screen.Login, restore(Screen.Login))
         assertEquals(null, restore(null))
+    }
+
+    @Test
+    fun savedChatWithoutTheCronFieldRestoresAsNotCron() {
+        val saved = """{"screen":"chat","key":"k","id":"id1","title":"T"}"""
+        assertEquals(Screen.Chat("id1", "T", key = "k"), ScreenSaver.restore(saved))
+    }
+
+    @Test
+    fun openingACronRunFromTheListShowsItsPromptCollapsed() {
+        serverAnswering(me = 200, sessions = sessionsJson("Nightly" to "cron"), gateway = true, transcript = CRON_TRANSCRIPT)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use {
+            awaitTag("chat-screen")
+            openDrawer()
+            await(hasText("View all"))
+            compose.onNodeWithText("View all").performClick()
+            awaitTag("sessions-screen")
+            await(inList("Nightly"))
+            compose.onNode(inList("Nightly")).performClick()
+
+            await(inChat("Scheduled job prompt"))
+            assertTrue(compose.onAllNodes(inChat("/attention-check")).fetchSemanticsNodes().isEmpty())
+        }
+    }
+
+    @Test
+    fun openingACronRunFromTheDrawerShowsItsPromptCollapsed() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Nightly" to "cron"), gateway = true, transcript = CRON_TRANSCRIPT)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use {
+            awaitTag("chat-screen")
+            openDrawerEntry("Nightly")
+
+            await(inChat("Scheduled job prompt"))
+            assertTrue(compose.onAllNodes(inChat("/attention-check")).fetchSemanticsNodes().isEmpty())
+        }
     }
 
     @Test

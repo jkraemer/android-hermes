@@ -64,6 +64,7 @@ private fun Screen.toJson(): JSONObject = when (this) {
         storedSessionId?.let { put("id", it) }
         title?.let { put("title", it) }
         fromList?.let { put("from", it.toJson()) }
+        if (cron) put("cron", true)
     }
 }
 
@@ -75,6 +76,7 @@ private fun JSONObject.toScreen(): Screen = when (getString("screen")) {
         optString("title").ifEmpty { null },
         optJSONObject("from")?.toScreen() as Screen.Sessions?,
         getString("key"),
+        optBoolean("cron"),
     )
 }
 
@@ -156,6 +158,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     /** The chat to come back to, opened again with a fresh controller; an unused new chat is just another new chat. */
     fun Screen.Chat.reopened() = Screen.Chat(
         storedSessionId.takeIf { chat?.hasStoredSession == true }, title.takeIf { chat?.hasStoredSession == true },
+        cron = cron,
     )
 
     fun showList() {
@@ -169,14 +172,14 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
         closeDrawer()
     }
 
-    fun openChat(id: String?, title: String?) {
+    fun openChat(id: String?, title: String?, cron: Boolean) {
         sessionList.closeSearch()
         val fromList = when (current) {
             is Screen.Sessions -> current
             is Screen.Chat -> current.fromList
             else -> null
         }
-        show(Screen.Chat(id, title, fromList))
+        show(Screen.Chat(id, title, fromList, cron = cron))
         closeDrawer()
     }
 
@@ -189,7 +192,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                         sessionList.openSearch()
                         showList()
                     },
-                    onNewChat = { openChat(null, null) },
+                    onNewChat = { openChat(null, null, false) },
                     onOpenChat = ::openChat,
                     onViewAll = ::showList,
                 )
@@ -213,8 +216,9 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                 }
                 ChatScreen(
                     model,
+                    cron = current.cron,
                     onOpenMenu = { scope.launch { drawerState.open() } },
-                    onNewChat = { openChat(null, null) },
+                    onNewChat = { openChat(null, null, false) },
                     onRetryConnect = graph::reconnect,
                     onStoredSessionId = { id -> if (current.storedSessionId == null) show(current.copy(storedSessionId = id)) },
                 )
