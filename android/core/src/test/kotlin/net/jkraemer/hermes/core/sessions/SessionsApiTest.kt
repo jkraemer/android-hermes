@@ -204,4 +204,23 @@ class SessionsApiTest {
 
         assertEquals("/api/sessions/a%2Fb%20c/messages?order=latest&limit=5", server.takeRequest().path)
     }
+
+    // An unclosed response body keeps its connection from going back to the pool, so the next
+    // request would open a new one (sequence number 0 again).
+    @Test
+    fun everyResponseIsClosedSoTheConnectionIsReused() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(401).setBody("nope"))
+        server.enqueue(MockResponse().setResponseCode(500).setBody("down"))
+        server.enqueue(MockResponse().setResponseCode(404).setBody("gone"))
+        enqueueList()
+        server.enqueue(MockResponse().setBody("""{"messages":[]}"""))
+
+        runCatching { api.list() }
+        runCatching { api.search("q") }
+        runCatching { api.lastAssistantText("s1") }
+        api.list()
+        api.lastAssistantText("s1")
+
+        assertEquals(listOf(0, 1, 2, 3, 4), (0..4).map { server.takeRequest().sequenceNumber })
+    }
 }

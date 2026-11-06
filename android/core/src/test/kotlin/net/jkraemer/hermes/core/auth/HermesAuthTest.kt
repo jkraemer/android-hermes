@@ -122,4 +122,26 @@ class HermesAuthTest {
         server.takeRequest()
         assertEquals(null, server.takeRequest().getHeader("Cookie"))
     }
+
+    // An unclosed response body keeps its connection from going back to the pool, so the next
+    // request would open a new one (sequence number 0 again).
+    @Test
+    fun everyResponseIsClosedSoTheConnectionIsReused() = runBlocking {
+        repeat(2) { server.enqueue(MockResponse().setResponseCode(401).setBody("nope")) }
+        server.enqueue(MockResponse().setResponseCode(429).setBody("slow down"))
+        server.enqueue(MockResponse().setResponseCode(503).setBody("down"))
+        server.enqueue(MockResponse().setResponseCode(500).setBody("down"))
+        server.enqueue(MockResponse().setBody("{}"))
+        server.enqueue(MockResponse().setBody("""{"ticket":"t1"}"""))
+
+        auth.login("jens", "pw")
+        auth.isLoggedIn()
+        auth.login("jens", "pw")
+        auth.login("jens", "pw")
+        runCatching { auth.mintWsTicket() }
+        auth.login("jens", "pw")
+        auth.mintWsTicket()
+
+        assertEquals(listOf(0, 1, 2, 3, 4, 5, 6), (0..6).map { server.takeRequest().sequenceNumber })
+    }
 }
