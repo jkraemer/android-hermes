@@ -89,10 +89,12 @@ private const val CLARIFY_REQUEST =
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatControllerTest {
+    private val logLines = CopyOnWriteArrayList<String>()
+
     private fun test(block: suspend kotlinx.coroutines.test.TestScope.(FakePeer, ChatController) -> Unit) =
         runTest(UnconfinedTestDispatcher()) {
             val peer = FakePeer()
-            block(peer, ChatController(peer, backgroundScope) { NOW })
+            block(peer, ChatController(peer, backgroundScope, log = { logLines += it }) { NOW })
         }
 
     @Test fun openFeedsTranscript() = test { peer, chat ->
@@ -335,6 +337,55 @@ class ChatControllerTest {
         val card = chat.state.value.items.single() as ChatItem.Approval
         assertEquals("srq-1", card.requestId)
         assertEquals(CardStatus.Open, card.status)
+    }
+
+    @Test fun logsTheReattachAndTheReplayWithoutChatContent() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        peer.event("message.start", seq = 1)
+        peer.on("session.events.since", sinceResult("[${delta(2, "TOPSECRET")},${delta(3, "TOPSECRET")}]", latestSeq = 3))
+        logLines.clear()
+
+        dropConnection(peer)
+
+        assertEquals(listOf("resync: session.activate ok", "resync: replayed 2 events"), logLines.toList())
+    }
+
+    @Test fun logsWhyTheStoredSessionWasReopened() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        peer.on("session.activate") { throw RpcException(RpcError(4007, "session not found")) }
+        peer.on("session.resume", resumeResult())
+        logLines.clear()
+
+        dropConnection(peer)
+
+        assertEquals(
+            listOf("resync: session.activate refused (4007 session not found), reopening", "resync: reopened"),
+            logLines.toList(),
+        )
+
+        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":false,"open_requests":[]}""")
+        peer.on("session.events.since", sinceResult("[]", epoch = "e2", latestSeq = 0))
+        logLines.clear()
+
+        dropConnection(peer)
+
+        assertEquals(
+            listOf("resync: session.activate ok", "resync: server restarted, reopening", "resync: reopened"),
+            logLines.toList(),
+        )
+    }
+
+    @Test fun logsAResyncThatCouldNotFinish() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        peer.on("session.events.since") { throw IOException("dropped again") }
+        logLines.clear()
+
+        dropConnection(peer)
+
+        assertEquals(listOf("resync: session.activate ok", "resync: incomplete (IOException)"), logLines.toList())
     }
 
     @Test fun reopenedLiveSessionDropDoesNotReplayOldEvents() = test { peer, chat ->

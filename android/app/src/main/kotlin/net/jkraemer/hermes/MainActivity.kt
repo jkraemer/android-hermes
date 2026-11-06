@@ -119,7 +119,7 @@ private fun HermesRoot(graph: AppGraph) {
             // so a rotation keeps the chat, and it does not change when a new chat learns its id.
             val chatKey = rememberSaveable { UUID.randomUUID().toString() }
             val chat = viewModel(key = chatKey) {
-                ChatViewModel(graph.rpc, current.storedSessionId, current.title, graph.needsAnswer, graph.seenStore)
+                ChatViewModel(graph.rpc, current.storedSessionId, current.title, graph.needsAnswer, graph.seenStore, log = graph.log)
             }
             DisposableEffect(chat) {
                 onDispose { if (!activity.isChangingConfigurations) chat.close() }

@@ -19,6 +19,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import net.jkraemer.hermes.core.HermesLog
 import net.jkraemer.hermes.core.auth.NotLoggedInException
 import net.jkraemer.hermes.core.chat.RpcPeer
 import okhttp3.HttpUrl
@@ -61,6 +62,7 @@ class RpcConnection(
     private val scope: CoroutineScope,
     private val pingIntervalMs: Long = 15_000,
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    private val log: HermesLog = HermesLog.None,
 ) : RpcPeer {
     /** One WebSocket attempt. Callbacks from a link that is no longer [current] are stale and ignored. */
     private inner class Link {
@@ -147,7 +149,20 @@ class RpcConnection(
 
     /** A closed connection stays [ConnectionState.Disconnected]. */
     private fun transition(newState: ConnectionState) {
-        synchronized(lock) { if (!closed) _state.value = newState }
+        synchronized(lock) { if (!closed) setState(newState) }
+    }
+
+    /** Must be called under [lock]. Logs changes only. */
+    private fun setState(newState: ConnectionState) {
+        if (_state.value == newState) return
+        _state.value = newState
+        log.log("connection: " + when (newState) {
+            ConnectionState.Disconnected -> "Disconnected"
+            ConnectionState.Connecting -> "Connecting"
+            ConnectionState.Ready -> "Ready"
+            is ConnectionState.Failed ->
+                if (newState.needsLogin) "Failed (login needed): ${newState.reason}" else "Failed: ${newState.reason}"
+        })
     }
 
     private suspend fun establish() {
@@ -171,7 +186,7 @@ class RpcConnection(
                 // The socket may have dropped or the connection been closed since the response.
                 if (current !== link || closed) throw IOException("Connection closed")
                 link.established = true
-                _state.value = ConnectionState.Ready
+                setState(ConnectionState.Ready)
                 pingJob = scope.launch { pingForever(link) }
             }
         } catch (e: Throwable) {
@@ -249,7 +264,7 @@ class RpcConnection(
             link?.ready?.completeExceptionally(cause)
             link?.webSocket?.close(NORMAL_CLOSURE, null)
             failPending(cause)
-            _state.value = ConnectionState.Disconnected
+            setState(ConnectionState.Disconnected)
         }
     }
 
@@ -322,7 +337,7 @@ class RpcConnection(
             pingJob?.cancel()
             // A link that never became ready is reported to whoever is establishing it.
             if (link.established && !closed) {
-                _state.value = ConnectionState.Connecting
+                setState(ConnectionState.Connecting)
                 launchAttempt { reconnect() }
             }
         }

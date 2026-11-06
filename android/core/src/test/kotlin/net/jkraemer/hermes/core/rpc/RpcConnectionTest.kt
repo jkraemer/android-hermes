@@ -19,6 +19,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import net.jkraemer.hermes.core.HermesLog
 import net.jkraemer.hermes.core.auth.NotLoggedInException
 import okhttp3.OkHttpClient
 import okhttp3.Response
@@ -125,8 +126,9 @@ class RpcConnectionTest {
         pingIntervalMs: Long = 60_000,
         sleep: suspend (Long) -> Unit = { },
         ticketProvider: suspend () -> String = { "t1" },
+        log: HermesLog = HermesLog.None,
     ): RpcConnection {
-        val connection = RpcConnection(client, server.url("/"), ticketProvider, scope, pingIntervalMs, sleep)
+        val connection = RpcConnection(client, server.url("/"), ticketProvider, scope, pingIntervalMs, sleep, log)
         connections += connection
         return connection
     }
@@ -330,6 +332,51 @@ class RpcConnectionTest {
         assertEquals("/api/ws?ticket=t1", server.takeRequest().path)
         assertEquals("/api/ws?ticket=t2", server.takeRequest().path)
         assertEquals(listOf(1_000L), delays.toList())
+    }
+
+    @Test
+    fun logsStateChangesAcrossADropWithoutTheTicket() {
+        val first = enqueueSocket()
+        enqueueSocket()
+        val tickets = mutableListOf("ticket-s3cr3t-1", "ticket-s3cr3t-2")
+        val lines = CopyOnWriteArrayList<String>()
+        val connection = newConnection(ticketProvider = { tickets.removeAt(0) }, log = { lines += it })
+
+        await {
+            connection.connect()
+            first.socket.close(1001, "going away")
+            while (lines.size < 4) kotlinx.coroutines.delay(10)
+            connection.close()
+        }
+
+        assertEquals(
+            listOf("connection: Connecting", "connection: Ready", "connection: Connecting", "connection: Ready", "connection: Disconnected"),
+            lines.toList(),
+        )
+        assertTrue(lines.none { "s3cr3t" in it })
+    }
+
+    @Test
+    fun logsWhyAConnectFailed() {
+        server.enqueue(MockResponse().setResponseCode(503))
+        val lines = CopyOnWriteArrayList<String>()
+        val connection = newConnection(log = { lines += it })
+
+        await { runCatching { connection.connect() } }
+
+        assertEquals("connection: Connecting", lines[0])
+        assertTrue(lines.toString(), lines[1].startsWith("connection: Failed: ") && "503" in lines[1])
+        assertEquals(2, lines.size)
+    }
+
+    @Test
+    fun logsALostLoginAsNeedingLogin() {
+        val lines = CopyOnWriteArrayList<String>()
+        val connection = newConnection(ticketProvider = { throw NotLoggedInException() }, log = { lines += it })
+
+        await { runCatching { connection.connect() } }
+
+        assertEquals(listOf("connection: Connecting", "connection: Failed (login needed): Not logged in"), lines.toList())
     }
 
     @Test

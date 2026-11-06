@@ -22,6 +22,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.longOrNull
 import java.io.IOException
+import net.jkraemer.hermes.core.HermesLog
 import net.jkraemer.hermes.core.rpc.RpcException
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.core.rpc.RpcFrame
@@ -43,7 +44,12 @@ class AnswerRefusedException(requestId: String) : Exception("Request $requestId 
  * and server requests, and sends prompts and answers. It subscribes on construction because the
  * connection does not replay events or requests to late collectors.
  */
-class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private val clock: () -> Instant = Instant::now) {
+class ChatController(
+    private val peer: RpcPeer,
+    scope: CoroutineScope,
+    private val log: HermesLog = HermesLog.None,
+    private val clock: () -> Instant = Instant::now,
+) {
     private val _state = MutableStateFlow(ChatState())
     val state: StateFlow<ChatState> = _state.asStateFlow()
 
@@ -234,8 +240,9 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
                 complete = reattach(live, stored)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 // Dropped again or an unusable answer; the next return to Ready resyncs from the same position.
+                log.log("resync: incomplete (${e.javaClass.simpleName})")
             }
         } finally {
             // An unfinished resync discards what it held: applying it would move lastSeq past the gap.
@@ -253,18 +260,29 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
                 put("session_id", live)
                 put("omit_messages", true)
             }).jsonObject
-        } catch (_: RpcException) {
+        } catch (e: RpcException) {
+            log.log("resync: session.activate refused (${e.error.code} ${e.error.message}), reopening")
             return reopen(stored)
         }
+        log.log("resync: session.activate ok")
         feedOpenRequests(activated)
         val missed = peer.call("session.events.since", sinceParams(live, _state.value.lastSeq)).jsonObject
         val restarted = missed.string("epoch") != epoch
         val latest = (missed["latest_seq"] as? JsonPrimitive)?.longOrNull ?: 0
         val truncated = (missed["truncated"] as? JsonPrimitive)?.booleanOrNull == true
-        if (restarted || truncated || latest < _state.value.lastSeq) return reopen(stored)
-        for (element in (missed["events"] as? JsonArray).orEmpty()) {
-            (element as? JsonObject)?.let(::eventFrom)?.let { feed(ChatInput.Event(it)) }
+        val reopenReason = when {
+            restarted -> "server restarted"
+            truncated -> "replay window passed"
+            latest < _state.value.lastSeq -> "server is behind the transcript"
+            else -> null
         }
+        if (reopenReason != null) {
+            log.log("resync: $reopenReason, reopening")
+            return reopen(stored)
+        }
+        val replayed = (missed["events"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::eventFrom) }
+        replayed.forEach { feed(ChatInput.Event(it)) }
+        log.log("resync: replayed ${replayed.size} events")
         feedOpenRequests(missed)
         return true
     }
@@ -273,8 +291,10 @@ class ChatController(private val peer: RpcPeer, scope: CoroutineScope, private v
         if (stored == null) return false
         return try {
             open(stored)
+            log.log("resync: reopened")
             true
-        } catch (_: RpcException) {
+        } catch (e: RpcException) {
+            log.log("resync: reopen refused (${e.error.code} ${e.error.message})")
             false
         }
     }

@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import net.jkraemer.hermes.core.HermesLog
 import net.jkraemer.hermes.core.chat.ApprovalChoice
 import net.jkraemer.hermes.core.chat.CardStatus
 import net.jkraemer.hermes.core.chat.ChatController
@@ -40,12 +41,13 @@ class ChatViewModel(
     initialTitle: String?,
     private val needsAnswer: MutableStateFlow<Set<String>>,
     private val seenStore: SeenStore,
+    log: HermesLog = HermesLog.None,
     private val clock: () -> Instant = Instant::now,
 ) : ViewModel() {
     // Everything this chat runs hangs off one job so close() can stop it all, the open in flight included.
     private val work = SupervisorJob(viewModelScope.coroutineContext[Job])
     private val scope = viewModelScope + work
-    private val controller = ChatController(peer, scope, clock)
+    private val controller = ChatController(peer, scope, log, clock)
 
     private val visible = MutableStateFlow(false)
 

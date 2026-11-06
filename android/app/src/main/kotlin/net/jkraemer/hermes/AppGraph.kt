@@ -1,6 +1,7 @@
 package net.jkraemer.hermes
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -8,6 +9,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import net.jkraemer.hermes.core.HermesLog
 import net.jkraemer.hermes.core.auth.FileCookieStore
 import net.jkraemer.hermes.core.auth.HermesAuth
 import net.jkraemer.hermes.core.auth.NotLoggedInException
@@ -40,6 +42,9 @@ class AppGraph(context: Context) {
     val cookieJar = PersistentCookieJar(FileCookieStore(File(context.filesDir, "cookies.json")))
     private val client = OkHttpClient.Builder().cookieJar(cookieJar).build()
 
+    /** Logcat line for the connection and chat events the core reports. */
+    val log = HermesLog { Log.i(LOG_TAG, it) }
+
     private var services: Services? = null
 
     val seenStore = SeenStore(prefs)
@@ -70,7 +75,7 @@ class AppGraph(context: Context) {
 
     private fun buildServices(url: HttpUrl): Services {
         val auth = HermesAuth(url, client)
-        return Services(auth, SessionsApi(url, client), RpcConnection(client, url, auth::mintWsTicket, scope))
+        return Services(auth, SessionsApi(url, client), RpcConnection(client, url, auth::mintWsTicket, scope, log = log))
     }
 
     private fun requireServices() = checkNotNull(services) { "No server URL is set" }
@@ -116,6 +121,7 @@ class AppGraph(context: Context) {
     }
 
     private companion object {
+        const val LOG_TAG = "Hermes"
         const val PREFS_NAME = "hermes"
         const val SERVER_URL_KEY = "server_url"
     }
