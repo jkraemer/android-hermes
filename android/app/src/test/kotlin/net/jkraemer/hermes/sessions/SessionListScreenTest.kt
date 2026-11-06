@@ -68,6 +68,9 @@ internal class FakeSource(
     val updates = mutableListOf<List<Any?>>()
     val listCalls = mutableListOf<Int>()
 
+    /** When set, a reload of the first page waits for it. */
+    var firstPageGate: CompletableDeferred<Unit>? = null
+
     /** When set, searches wait for it; [searchStarted] counts the searches that have begun. */
     var searchGate: CompletableDeferred<Unit>? = null
     @Volatile var searchStarted = 0
@@ -75,6 +78,7 @@ internal class FakeSource(
     override suspend fun list(offset: Int, limit: Int): SessionPage {
         failure?.let { throw it }
         listCalls += offset
+        if (offset == 0) firstPageGate?.await()
         return SessionPage(sessions.drop(offset).take(limit), total)
     }
 
@@ -462,6 +466,55 @@ class SessionListScreenTest {
         val lastRow = compose.onNodeWithText("s30").fetchSemanticsNode().boundsInRoot
         val button = compose.onNodeWithContentDescription("New chat").fetchSemanticsNode().boundsInRoot
         assertTrue("last row $lastRow overlaps the button $button", lastRow.bottom <= button.top)
+    }
+
+    @Test
+    fun aQuietRefreshKeepsEveryLoadedPageAndShowsNoRefreshIndicator() {
+        val all = (1..60).map { session("s$it", lastActive = NOW.minusSeconds(it * 60L)) }
+        show(*all.toTypedArray())
+        compose.waitUntil(10_000) { source.listCalls.isNotEmpty() }
+        compose.onNodeWithTag("session-list").performScrollToIndex(50)
+        compose.waitUntil(10_000) { source.listCalls.size >= 2 }
+        compose.waitUntil(10_000) { viewModel.state.value.items.size > 52 }
+        val loaded = viewModel.state.value.items.size
+
+        val gate = CompletableDeferred<Unit>()
+        source.firstPageGate = gate
+        val calls = source.listCalls.size
+        viewModel.refreshQuietly()
+        compose.waitUntil(10_000) { source.listCalls.size > calls }
+
+        // While the first page is on its way and after it arrives, nothing is dropped and no spinner shows.
+        assertEquals(false, viewModel.state.value.refreshing)
+        assertEquals(loaded, viewModel.state.value.items.size)
+        gate.complete(Unit)
+        compose.waitForIdle()
+        assertEquals(false, viewModel.state.value.refreshing)
+        assertEquals(loaded, viewModel.state.value.items.size)
+    }
+
+    @Test
+    fun aQuietRefreshPicksUpNewSessionsForTheDrawer() {
+        show(session("a", title = "Morning briefing"))
+        waitForText("Morning briefing")
+
+        source.sessions = listOf(session("b", title = "Fresh one", lastActive = NOW), session("a", title = "Morning briefing"))
+        viewModel.refreshQuietly()
+
+        compose.waitUntil(10_000) { viewModel.state.value.drawer.recents.any { it.session.id == "b" } }
+    }
+
+    @Test
+    fun aFailedQuietRefreshShowsNoErrorBanner() {
+        show(session("a", title = "Morning briefing"))
+        waitForText("Morning briefing")
+
+        source.failure = IOException("timeout")
+        viewModel.refreshQuietly()
+        compose.waitForIdle()
+
+        assertEquals(null, viewModel.state.value.error)
+        compose.onAllNodes(hasText("Can't reach", substring = true)).assertCountEquals(0)
     }
 
     @Test

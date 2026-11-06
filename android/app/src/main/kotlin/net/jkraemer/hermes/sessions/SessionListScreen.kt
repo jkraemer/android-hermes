@@ -1,5 +1,6 @@
 package net.jkraemer.hermes.sessions
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -108,6 +109,8 @@ fun SessionListScreen(
     val listState = rememberLazyListState()
     val locale = LocalConfiguration.current.locales[0]
 
+    // Back closes search before it leaves the list.
+    BackHandler(state.searchOpen, viewModel::closeSearch)
     LaunchedEffect(Unit) { viewModel.refresh() }
     LaunchedEffect(state.needsLogin) {
         if (state.needsLogin) {

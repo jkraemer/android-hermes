@@ -101,6 +101,27 @@ class SessionListViewModel(
         loadJob = viewModelScope.launch { reload() }
     }
 
+    /**
+     * Brings the newest sessions up to date without a refresh indicator and without dropping the
+     * pages loaded further down, for the drawer, which only needs the newest ones. A failure is
+     * silent: the next screen refresh reports it.
+     */
+    fun refreshQuietly() {
+        viewModelScope.launch {
+            val page = try {
+                source.list(0, PAGE_SIZE)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: NotLoggedInException) {
+                loaded.update { it.copy(needsLogin = true) }
+                return@launch
+            } catch (e: Exception) {
+                return@launch
+            }
+            loaded.update { it.copy(sessions = (page.sessions + it.sessions).distinctBy(SessionSummary::id), total = page.total) }
+        }
+    }
+
     /** Appends the next page when there is one. */
     fun loadMore() {
         val current = loaded.value

@@ -162,6 +162,15 @@ class ChatViewModel(
         }
     }
 
+    /** Whether [close] has stopped this chat. */
+    val isClosed: Boolean get() = !work.isActive
+
+    /**
+     * Whether the session exists on the server: one that was opened by id does, a new one only once
+     * something was said in it (Hermes keeps an empty draft out of its session list).
+     */
+    val hasStoredSession: Boolean get() = storedSessionId != null || chat.value.items.isNotEmpty()
+
     /** Stops the controller and takes the chat out of [needsAnswer]; safe to call again. */
     fun close() {
         work.cancel()

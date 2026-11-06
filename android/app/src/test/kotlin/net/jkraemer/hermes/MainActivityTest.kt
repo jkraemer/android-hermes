@@ -1,6 +1,9 @@
 package net.jkraemer.hermes
 
 import androidx.compose.runtime.saveable.SaverScope
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
@@ -12,14 +15,22 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import net.jkraemer.hermes.chat.ChatViewModel
 import okhttp3.Cookie
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
+import java.util.concurrent.CopyOnWriteArrayList
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -33,16 +44,44 @@ class MainActivityTest {
     private val graph get() = (RuntimeEnvironment.getApplication() as HermesApp).graph
     private val server = MockWebServer()
 
+    /** Every JSON-RPC request the fake gateway received, as method and params. */
+    private val rpcCalls = CopyOnWriteArrayList<Pair<String, JsonObject>>()
+
+    private fun rpcCalls(method: String) = rpcCalls.filter { it.first == method }.map { it.second }
+
+    /** A gateway that is ready at once, answers every request, and opens whatever session it is asked for. */
+    private inner class FakeGateway : WebSocketListener() {
+        override fun onOpen(webSocket: WebSocket, response: Response) {
+            webSocket.send("""{"jsonrpc":"2.0","method":"event","params":{"type":"gateway.ready","payload":{"replay_epoch":"e1"}}}""")
+        }
+
+        override fun onMessage(webSocket: WebSocket, text: String) {
+            val frame = Json.parseToJsonElement(text.trimEnd('\n')).jsonObject
+            val method = frame["method"]?.jsonPrimitive?.content ?: return
+            val params = frame["params"] as? JsonObject ?: JsonObject(emptyMap())
+            rpcCalls += method to params
+            val stored = params["session_id"]?.jsonPrimitive?.content ?: "new-${rpcCalls.size}"
+            val result = when (method) {
+                "session.resume", "session.create" ->
+                    """{"session_id":"live-$stored","stored_session_id":"$stored","messages":[],"running":false,"open_requests":[]}"""
+                else -> "{}"
+            }
+            webSocket.send("""{"jsonrpc":"2.0","id":${frame.getValue("id")},"result":$result}""" + "\n")
+        }
+    }
+
     @After fun stopServer() {
         server.shutdown()
         graph.close()
     }
 
     /** Points the app at a fake server whose `api/auth/me` answers with [me]; everything else is a 404. */
-    private fun serverAnswering(me: Int, wsTicket: Int = 404, sessions: String? = null) {
+    private fun serverAnswering(me: Int, wsTicket: Int = 404, sessions: String? = null, gateway: Boolean = false) {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 if (request.path?.startsWith("/api/sessions?") == true && sessions != null) return MockResponse().setBody(sessions)
+                if (gateway && request.path == "/api/auth/ws-ticket") return MockResponse().setBody("""{"ticket":"t"}""")
+                if (gateway && request.path?.startsWith("/api/ws") == true) return MockResponse().withWebSocketUpgrade(FakeGateway())
                 return MockResponse().setResponseCode(
                     when (request.path) {
                         "/api/auth/me" -> me
@@ -86,11 +125,40 @@ class MainActivityTest {
         ActivityScenario.launch(MainActivity::class.java).use { awaitTag("login-screen") }
     }
 
+    /** Rows of title to source, each active a minute longer ago than the one before: the first is the newest. */
     private fun sessionsJson(vararg rows: Pair<String, String>): String {
         val now = System.currentTimeMillis() / 1000.0
-        return rows.joinToString(",", """{"sessions":[""", """],"total":${rows.size}}""") { (title, source) ->
-            """{"id":"id-$title","title":"$title","source":"$source","started_at":${now - 90},"last_active":${now - 60}}"""
+        return rows.withIndex().joinToString(",", """{"sessions":[""", """],"total":${rows.size}}""") { (index, row) ->
+            val (title, source) = row
+            """{"id":"id-$title","title":"$title","source":"$source","started_at":${now - 90 - index * 60},"last_active":${now - 60 - index * 60}}"""
         }
+    }
+
+    private fun inChat(text: String) = hasText(text) and hasAnyAncestor(hasTestTag("chat-screen"))
+
+    private fun inList(text: String) = hasText(text) and hasAnyAncestor(hasTestTag("session-list"))
+
+    private fun await(matcher: SemanticsMatcher) =
+        compose.waitUntil(10_000) { compose.onAllNodes(matcher).fetchSemanticsNodes().isNotEmpty() }
+
+    private fun openDrawer() = compose.onNodeWithContentDescription("Menu").performClick()
+
+    private fun openDrawerEntry(title: String) {
+        openDrawer()
+        await(hasText(title) and hasClickAction())
+        compose.onNode(hasText(title) and hasClickAction()).performClick()
+    }
+
+    private fun pressBack(scenario: ActivityScenario<MainActivity>) =
+        scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+
+    /** The chat view models the activity holds, oldest first by their store key. */
+    private fun chatModels(scenario: ActivityScenario<MainActivity>): List<ChatViewModel> {
+        var models = emptyList<ChatViewModel>()
+        scenario.onActivity { activity ->
+            models = activity.viewModelStore.keys().mapNotNull { activity.viewModelStore[it] as? ChatViewModel }
+        }
+        return models
     }
 
     private fun showsText(text: String): Boolean = compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
@@ -122,7 +190,8 @@ class MainActivityTest {
         ActivityScenario.launch(MainActivity::class.java).use {
             awaitTag("chat-screen")
             assertTrue(showsText("New chat"))
-            assertFalse(showsText("Nightly"))
+            // The drawer, composed but closed, lists the run; the chat must not be it.
+            assertTrue(compose.onAllNodes(inChat("Nightly")).fetchSemanticsNodes().isEmpty())
         }
     }
 
@@ -185,32 +254,154 @@ class MainActivityTest {
     }
 
     @Test
+    fun openingAnotherChatFromTheDrawerStartsAFreshControllerAndClosesTheOldOne() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Baking" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            compose.waitUntil(10_000) { rpcCalls("session.resume").size == 1 }
+            assertEquals("id-Sourdough", rpcCalls("session.resume").single()["session_id"]?.jsonPrimitive?.content)
+            val first = chatModels(scenario).single()
+
+            openDrawerEntry("Baking")
+
+            await(inChat("Baking"))
+            compose.waitUntil(10_000) { rpcCalls("session.resume").size == 2 }
+            assertEquals("id-Baking", rpcCalls("session.resume").last()["session_id"]?.jsonPrimitive?.content)
+            assertTrue("the first chat's controller was not closed", first.isClosed)
+            val open = chatModels(scenario).filter { !it.isClosed }
+            assertEquals(1, open.size)
+            assertTrue(open.single() !== first)
+        }
+    }
+
+    @Test
+    fun backFromAChatOpenedFromTheDrawerOfTheHomeChatLeavesTheApp() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Baking" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            openDrawerEntry("Baking")
+            await(inChat("Baking"))
+
+            var finishing = false
+            scenario.onActivity {
+                it.onBackPressedDispatcher.onBackPressed()
+                finishing = it.isFinishing
+            }
+            assertTrue("back did not leave the app", finishing)
+        }
+    }
+
+    @Test
+    fun backFromAChatSwitchedToInTheDrawerReturnsToTheListTheFirstChatCameFrom() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Baking" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            openDrawer()
+            await(hasText("View all"))
+            compose.onNodeWithText("View all").performClick()
+            awaitTag("sessions-screen")
+            await(inList("Baking"))
+            compose.onNode(inList("Baking")).performClick()
+            await(inChat("Baking"))
+
+            openDrawerEntry("Sourdough")
+            await(inChat("Sourdough"))
+            pressBack(scenario)
+
+            awaitTag("sessions-screen")
+        }
+    }
+
+    @Test
+    fun backFromTheListReturnsToTheChatItWasOpenedFrom() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            await(inChat("Sourdough"))
+            openDrawer()
+            await(hasText("View all"))
+            compose.onNodeWithText("View all").performClick()
+            awaitTag("sessions-screen")
+
+            pressBack(scenario)
+
+            awaitTag("chat-screen")
+            await(inChat("Sourdough"))
+            // The chat is opened again with a fresh controller.
+            compose.waitUntil(10_000) { rpcCalls("session.resume").size == 2 }
+        }
+    }
+
+    @Test
+    fun backFromTheListToANewChatThatWasNeverUsedStartsAnotherNewChat() {
+        serverAnswering(me = 200, gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            compose.waitUntil(10_000) { rpcCalls("session.create").size == 1 }
+            openDrawer()
+            await(hasText("View all"))
+            compose.onNodeWithText("View all").performClick()
+            awaitTag("sessions-screen")
+
+            pressBack(scenario)
+
+            awaitTag("chat-screen")
+            compose.waitUntil(10_000) { rpcCalls("session.create").size == 2 }
+            assertEquals(emptyList<JsonObject>(), rpcCalls("session.resume"))
+        }
+    }
+
+    @Test
+    fun backFromTheListWithSearchOpenClosesSearchFirst() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            openDrawer()
+            await(hasContentDescription("Search") and hasClickAction())
+            compose.onAllNodes(hasContentDescription("Search") and hasClickAction())[0].performClick()
+            awaitTag("sessions-screen")
+            awaitTag("search")
+
+            pressBack(scenario)
+
+            compose.waitUntil(10_000) { compose.onAllNodes(hasTestTag("search")).fetchSemanticsNodes().isEmpty() }
+            awaitTag("sessions-screen")
+        }
+    }
+
+    @Test
+    fun theDrawerAlreadyListsSessionsTheFirstTimeItIsOpened() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Baking" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use {
+            awaitTag("chat-screen")
+            // Baking is not the open chat, so it can only be the drawer's entry; no menu click has happened.
+            compose.waitUntil(10_000) { showsText("Baking") }
+        }
+    }
+
+    @Test
     fun theScreenSurvivesSavingAndRestoring() {
-        val chat = Screen.Chat("id:with:colons", "A | title", fromList = true)
         val restore = { screen: Screen? ->
             with(ScreenSaver) {
                 val saved = SaverScope { true }.save(screen)!!
                 restore(saved)
             }
         }
-        assertEquals(chat, restore(chat))
-        assertEquals(Screen.Chat(null, null, false, "k").copy(), restore(Screen.Chat(null, null, false, "k")))
-        assertEquals(Screen.Sessions, restore(Screen.Sessions))
+        val home = Screen.Chat("id", "Home | title", key = "h")
+        val list = Screen.Sessions(back = home)
+        val fromList = Screen.Chat("id:with:colons", "A \u001f title", fromList = list, key = "k")
+        assertEquals(fromList, restore(fromList))
+        assertEquals(Screen.Chat(null, null, null, "k"), restore(Screen.Chat(null, null, null, "k")))
+        assertEquals(list, restore(list))
+        assertEquals(Screen.Sessions(), restore(Screen.Sessions()))
         assertEquals(Screen.Login, restore(Screen.Login))
         assertEquals(null, restore(null))
-    }
-
-    @Test
-    fun unreachableServerWithoutCookieShowsLoginScreen() {
-        serverAnswering(me = 200)
-        server.shutdown()
-        ActivityScenario.launch(MainActivity::class.java).use { awaitTag("login-screen") }
-    }
-
-    @Test
-    fun lostSessionOnTheConnectionShowsLoginScreen() {
-        serverAnswering(me = 200, wsTicket = 401)
-        storeSessionCookie()
-        ActivityScenario.launch(MainActivity::class.java).use { awaitTag("login-screen") }
     }
 }

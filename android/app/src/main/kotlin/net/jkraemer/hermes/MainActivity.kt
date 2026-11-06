@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.platform.LocalContext
+import org.json.JSONObject
 import net.jkraemer.hermes.chat.ChatScreen
 import net.jkraemer.hermes.chat.ChatViewModel
 import androidx.activity.enableEdgeToEdge
@@ -56,30 +57,31 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private const val FIELD_SEPARATOR = "\u001f"
+private fun Screen.toJson(): JSONObject = when (this) {
+    Screen.Login -> JSONObject().put("screen", "login")
+    is Screen.Sessions -> JSONObject().put("screen", "sessions").apply { back?.let { put("back", it.toJson()) } }
+    is Screen.Chat -> JSONObject().put("screen", "chat").put("key", key).apply {
+        storedSessionId?.let { put("id", it) }
+        title?.let { put("title", it) }
+        fromList?.let { put("from", it.toJson()) }
+    }
+}
+
+private fun JSONObject.toScreen(): Screen = when (getString("screen")) {
+    "login" -> Screen.Login
+    "sessions" -> Screen.Sessions(optJSONObject("back")?.toScreen() as Screen.Chat?)
+    else -> Screen.Chat(
+        optString("id").ifEmpty { null },
+        optString("title").ifEmpty { null },
+        optJSONObject("from")?.toScreen() as Screen.Sessions?,
+        getString("key"),
+    )
+}
 
 /** Keeps the screen across rotation and process death, which a plain `remember` would not. */
 internal val ScreenSaver = Saver<Screen?, String>(
-    save = {
-        when (it) {
-            null -> ""
-            Screen.Login -> "login"
-            Screen.Sessions -> "sessions"
-            is Screen.Chat -> listOf("chat", it.key, it.fromList, it.storedSessionId.orEmpty(), it.title.orEmpty())
-                .joinToString(FIELD_SEPARATOR)
-        }
-    },
-    restore = {
-        when (it) {
-            "" -> null
-            "login" -> Screen.Login
-            "sessions" -> Screen.Sessions
-            else -> {
-                val (_, key, fromList, id, title) = it.split(FIELD_SEPARATOR, limit = 5)
-                Screen.Chat(id.ifEmpty { null }, title.ifEmpty { null }, fromList.toBoolean(), key)
-            }
-        }
-    },
+    save = { it?.toJson()?.toString() ?: "" },
+    restore = { if (it.isEmpty()) null else JSONObject(it).toScreen() },
 )
 
 @Composable
@@ -115,7 +117,7 @@ private fun HermesRoot(graph: AppGraph) {
                 }
             })
         }
-        Screen.Sessions, is Screen.Chat -> SessionsAndChat(graph, current) { screen = it }
+        is Screen.Sessions, is Screen.Chat -> SessionsAndChat(graph, current) { screen = it }
     }
 }
 
@@ -126,20 +128,51 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     val sessionList = viewModel {
         SessionListViewModel(SessionsApiSource { graph.sessions }, graph.needsAnswer, graph.seenStore)
     }
+    val chat = (current as? Screen.Chat)?.let { open ->
+        viewModel(key = open.key) {
+            ChatViewModel(graph.rpc, open.storedSessionId, open.title, graph.needsAnswer, graph.seenStore, log = graph.log)
+        }
+    }
     val sessionState by sessionList.state.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
 
-    // The drawer shows what changed since it was last open.
-    LaunchedEffect(drawerState.isOpen) { if (drawerState.isOpen) sessionList.refresh() }
+    // The drawer lists the newest sessions, so they are loaded before it is first opened and
+    // brought up to date as it opens, without disturbing the full list.
+    LaunchedEffect(Unit) { sessionList.refreshQuietly() }
+    LaunchedEffect(drawerState.targetValue == DrawerValue.Open) { if (drawerState.targetValue == DrawerValue.Open) sessionList.refreshQuietly() }
 
-    // A chat opened from the list goes back to it; from anywhere else back leaves the app.
-    BackHandler(current is Screen.Chat && current.fromList) { show(Screen.Sessions) }
+    // Back goes to the list a chat was opened from, and from the list to the chat it was opened
+    // from; with neither it leaves the app.
+    BackHandler(current is Screen.Chat && current.fromList != null) { show((current as Screen.Chat).fromList!!) }
+    BackHandler(current is Screen.Sessions && current.back != null) { show((current as Screen.Sessions).back!!) }
 
     fun closeDrawer() = scope.launch { drawerState.close() }
+
+    /** The chat to come back to, opened again with a fresh controller; an unused new chat is just another new chat. */
+    fun Screen.Chat.reopened() = Screen.Chat(
+        storedSessionId.takeIf { chat?.hasStoredSession == true }, title.takeIf { chat?.hasStoredSession == true },
+    )
+
+    fun showList() {
+        show(
+            when (current) {
+                // A chat that came from the list goes back to that list, which already remembers where it began.
+                is Screen.Chat -> current.fromList ?: Screen.Sessions(back = current.reopened())
+                else -> current
+            },
+        )
+        closeDrawer()
+    }
+
     fun openChat(id: String?, title: String?) {
         sessionList.closeSearch()
-        show(Screen.Chat(id, title, fromList = current is Screen.Sessions))
+        val fromList = when (current) {
+            is Screen.Sessions -> current
+            is Screen.Chat -> current.fromList
+            else -> null
+        }
+        show(Screen.Chat(id, title, fromList))
         closeDrawer()
     }
 
@@ -150,22 +183,18 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                     sessionState.drawer,
                     onSearch = {
                         sessionList.openSearch()
-                        show(Screen.Sessions)
-                        closeDrawer()
+                        showList()
                     },
                     onNewChat = { openChat(null, null) },
                     onOpenChat = ::openChat,
-                    onViewAll = {
-                        show(Screen.Sessions)
-                        closeDrawer()
-                    },
+                    onViewAll = ::showList,
                 )
             }
         },
         drawerState = drawerState,
     ) {
         when (current) {
-            Screen.Sessions -> SessionListScreen(
+            is Screen.Sessions -> SessionListScreen(
                 sessionList,
                 host = graph.serverUrl?.host.orEmpty(),
                 onOpenMenu = { scope.launch { drawerState.open() } },
@@ -174,14 +203,12 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                 onRetryConnect = graph::reconnect,
             )
             is Screen.Chat -> {
-                val chat = viewModel(key = current.key) {
-                    ChatViewModel(graph.rpc, current.storedSessionId, current.title, graph.needsAnswer, graph.seenStore, log = graph.log)
-                }
-                DisposableEffect(chat) {
-                    onDispose { if (!activity.isChangingConfigurations) chat.close() }
+                val model = checkNotNull(chat)
+                DisposableEffect(model) {
+                    onDispose { if (!activity.isChangingConfigurations) model.close() }
                 }
                 ChatScreen(
-                    chat,
+                    model,
                     onOpenMenu = { scope.launch { drawerState.open() } },
                     onNewChat = { openChat(null, null) },
                     onRetryConnect = graph::reconnect,

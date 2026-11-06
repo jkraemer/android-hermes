@@ -28,17 +28,19 @@ import java.util.UUID
 
 sealed interface Screen {
     data object Login : Screen
-    data object Sessions : Screen
+
+    /** The full session list; back returns to [back], the chat it was opened from, and leaves the app when there is none. */
+    data class Sessions(val back: Chat? = null) : Screen
 
     /**
      * [storedSessionId] null starts a new chat; [title] is the one the session list showed. [fromList]
-     * is whether back returns to the session list. [key] tells chats apart, so opening another chat
-     * from a chat gets a fresh controller; it is kept when a new chat learns its id.
+     * is the list back returns to, if the chat was opened from one. [key] tells chats apart, so
+     * opening another chat from a chat gets a fresh controller; it is kept when a new chat learns its id.
      */
     data class Chat(
         val storedSessionId: String?,
         val title: String? = null,
-        val fromList: Boolean = false,
+        val fromList: Sessions? = null,
         val key: String = UUID.randomUUID().toString(),
     ) : Screen
 }

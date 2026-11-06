@@ -47,6 +47,6 @@ class LaunchScreenTest {
     @Test fun noSessionsStartsANewChat() = assertNewChat(launch())
 
     @Test fun aReopenedChatIsNotOpenedFromTheList() {
-        assertEquals(false, launch(session("a", Duration.ofMinutes(1))).fromList)
+        assertEquals(null, launch(session("a", Duration.ofMinutes(1))).fromList)
     }
 }
