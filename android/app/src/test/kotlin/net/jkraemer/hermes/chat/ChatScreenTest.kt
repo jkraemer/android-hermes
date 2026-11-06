@@ -18,6 +18,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.swipeDown
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.serialization.json.Json
@@ -76,8 +77,8 @@ class ChatScreenTest {
         }
     }
 
-    private fun waitForText(text: String) = compose.waitUntil(10_000) {
-        compose.onAllNodesWithText(text).fetchSemanticsNodes().isNotEmpty()
+    private fun waitForText(text: String, substring: Boolean = false) = compose.waitUntil(10_000) {
+        compose.onAllNodesWithText(text, substring = substring).fetchSemanticsNodes().isNotEmpty()
     }
 
     private val promptTranscript = """{"session_id":"live1","stored_session_id":"stored1","messages":[
@@ -86,15 +87,16 @@ class ChatScreenTest {
 
     private fun reply(n: Int) = (1..6).joinToString("\n\n") { "Reply $n paragraph $it says something **useful** about the question, long enough to wrap over several lines on a phone screen." }
 
-    /** [pairs] questions, each answered by a finished reply of several paragraphs. */
-    private fun longTranscript(pairs: Int): String {
+    /** [pairs] questions, each answered by a finished reply of several paragraphs, and then [lastReply] if there is one. */
+    private fun longTranscript(pairs: Int, lastReply: String? = null, running: Boolean = false): String {
         val messages = buildJsonArray {
             for (n in 1..pairs) {
                 add(buildJsonObject { put("role", "user"); put("text", "Question $n") })
                 add(buildJsonObject { put("role", "assistant"); put("text", reply(n)) })
             }
+            if (lastReply != null) add(buildJsonObject { put("role", "assistant"); put("text", lastReply) })
         }
-        return """{"session_id":"live1","stored_session_id":"stored1","messages":$messages,"running":false,"open_requests":[]}"""
+        return """{"session_id":"live1","stored_session_id":"stored1","messages":$messages,"running":$running,"open_requests":[]}"""
     }
 
     private fun showLongChat(pairs: Int) {
@@ -120,9 +122,122 @@ class ChatScreenTest {
         compose.onNode(hasText("Reply 6 paragraph 6", substring = true)).assertIsDisplayed()
     }
 
+    /** Paragraphs [from]..[to] of reply 7, which is several screens long once complete. */
+    private fun longReply(from: Int, to: Int) =
+        (from..to).joinToString("\n\n") { "Reply 7 paragraph $it says something **useful** about the question, long enough to wrap over several lines on a phone screen." }
+
+    private fun textPayload(text: String) = buildJsonObject { put("text", text) }.toString()
+
+    /** The long chat of six questions, scrolled to its end, while the first half of reply 7 streams in. */
+    private fun streamHalfALongReply() {
+        showLongChat(6)
+        peer.event("message.start")
+        peer.event("message.delta", textPayload(longReply(1, 15)))
+        waitForText("Reply 7 paragraph 15 says", substring = true)
+        compose.waitForIdle()
+        compose.onNode(hasText("Reply 7 paragraph 15 says", substring = true)).assertIsDisplayed()
+    }
+
+    private fun dropTheConnection() {
+        peer.state.value = ConnectionState.Connecting
+        compose.waitForIdle()
+        compose.onNodeWithText("Reconnecting…").assertIsDisplayed()
+    }
+
+    /** Returns once the resync after the drop is done and the banner is gone. */
+    private fun reconnect() {
+        val before = peer.calls.size
+        peer.state.value = ConnectionState.Ready
+        compose.waitUntil(10_000) { peer.calls.drop(before).any { it.first == "session.events.since" } }
+        compose.waitForIdle()
+        compose.waitUntil(10_000) { compose.onAllNodesWithText("Reconnecting…").fetchSemanticsNodes().isEmpty() }
+    }
+
+    /** The rest of reply 7 arrives and the reply completes. */
+    private fun finishTheLongReply() {
+        peer.event("message.delta", textPayload("\n\n" + longReply(16, 30)))
+        peer.event("message.complete", textPayload(longReply(1, 30)))
+        // Emitted events reach the chat through the main looper, which waitUntil alone does not run.
+        compose.waitForIdle()
+        compose.waitUntil(10_000) { viewModel.parsedReplies.value.size == 7 }
+        compose.waitForIdle()
+    }
+
+    private fun assertTheLongReplyEndIsShown() =
+        compose.onNode(hasText("Reply 7 paragraph 30 says", substring = true)).assertIsDisplayed()
+
+    @Test
+    fun aReconnectMidReplyKeepsFollowingTheReplyToItsEnd() {
+        streamHalfALongReply()
+        dropTheConnection()
+
+        reconnect()
+        finishTheLongReply()
+
+        assertTheLongReplyEndIsShown()
+    }
+
+    @Test
+    fun aReconnectThatReopensTheChatShowsTheEndOfTheReplyFinishedMeanwhile() {
+        streamHalfALongReply()
+        dropTheConnection()
+        // Hermes reaped the detached session and finished the reply without us; the reopened transcript has all of it.
+        peer.refusing = setOf("session.activate")
+        peer.resume = longTranscript(6, lastReply = longReply(1, 30))
+
+        reconnect()
+        compose.waitUntil(10_000) { viewModel.parsedReplies.value.size == 7 }
+        compose.waitForIdle()
+
+        assertEquals("reopened", 2, peer.calls.count { it.first == "session.resume" })
+        assertTheLongReplyEndIsShown()
+    }
+
+    @Test
+    fun aReconnectThatReopensTheChatKeepsFollowingTheReply() {
+        streamHalfALongReply()
+        dropTheConnection()
+        // The reopened transcript ends with the question; the reply goes on streaming.
+        peer.refusing = setOf("session.activate")
+        peer.resume = longTranscript(6, running = true)
+
+        reconnect()
+        finishTheLongReply()
+
+        assertEquals("reopened", 2, peer.calls.count { it.first == "session.resume" })
+        assertTheLongReplyEndIsShown()
+    }
+
+    @Test
+    fun aReconnectLeavesAChatScrolledAwayFromItsEndWhereItWas() {
+        streamHalfALongReply()
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        val (paragraph, top) = firstParagraphShown()
+        dropTheConnection()
+
+        reconnect()
+        finishTheLongReply()
+
+        assertEquals(paragraph, top, compose.onNodeWithText(paragraph, substring = true).fetchSemanticsNode().positionInRoot.y, 0.5f)
+    }
+
+    /** The first paragraph of reply 6 or 7 that is in view, and its top. */
+    private fun firstParagraphShown(): Pair<String, Float> {
+        val messages = compose.onNodeWithTag("messages").fetchSemanticsNode().boundsInRoot
+        val paragraphs = (1..6).map { "Reply 6 paragraph $it says" } + (1..15).map { "Reply 7 paragraph $it says" }
+        return paragraphs.firstNotNullOf { text ->
+            compose.onAllNodesWithText(text, substring = true).fetchSemanticsNodes().firstOrNull()
+                ?.positionInRoot?.y?.takeIf { it >= messages.top && it < messages.bottom }?.let { text to it }
+        }
+    }
+
     @Test
     fun aFinishedReplyHasItsTextInTheFrameItIsScrolledTo() {
         showLongChat(6)
+        // A jump to an index is not a scroll the chat sees, so the user first scrolls away from the end it follows.
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
         compose.mainClock.autoAdvance = false
 
         compose.onNodeWithTag("messages").performScrollToIndex(3)

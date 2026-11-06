@@ -64,6 +64,9 @@ import net.jkraemer.hermes.core.chat.ToolCall
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.sessions.ScheduleIcon
 import java.time.Instant
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * [cron] is whether this chat is a cron run, whose first message is the job's prompt and is shown collapsed.
@@ -149,7 +152,7 @@ private fun OpenFailedBanner(onRetry: () -> Unit) {
 private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatViewModel, clock: () -> Instant, modifier: Modifier) {
     val listState = rememberLazyListState()
     val parsedReplies by viewModel.parsedReplies.collectAsStateWithLifecycle()
-    FollowTheEnd(listState, chatItems)
+    FollowTheEnd(listState)
     val jobPromptIndex = if (cron) chatItems.indexOfFirst { it is ChatItem.User } else -1
     LazyColumn(
         modifier.fillMaxWidth().testTag("messages"),
@@ -184,31 +187,33 @@ private fun Reply(reply: ChatItem.Assistant, parsed: State.Success?) {
     else Markdown(reply.markdown, modifier = modifier, loading = { Text(reply.markdown, it, style = MaterialTheme.typography.bodyLarge) })
 }
 
-/** Keeps the newest content in view while it grows, until the user scrolls away from the end; scrolling back to the end resumes it. */
+/**
+ * Keeps the end of the chat in view while it is followed: whenever the list could scroll further, because an item
+ * was added, a reply grew, a reply was laid out anew once its Markdown was parsed, or the list got less room. Following
+ * the layout rather than the items matters when much arrives at once, as after a reconnect: the reply's new text is
+ * laid out a few frames after it arrives. Scrolling away from the end stops following; scrolling back resumes it.
+ */
 @Composable
-private fun FollowTheEnd(listState: LazyListState, items: List<ChatItem>) {
+private fun FollowTheEnd(listState: LazyListState) {
     var following by remember { mutableStateOf(true) }
-    var scrollingItself by remember { mutableStateOf(false) }
     LaunchedEffect(listState) {
-        snapshotFlow { listState.isScrollInProgress to !listState.canScrollForward }.collect { (scrolling, atEnd) ->
-            if (scrolling && !scrollingItself) following = atEnd
+        // Scrolling to the end happens in here, so this never sees its own scrolls in progress, only the user's.
+        snapshotFlow { Triple(listState.isScrollInProgress, listState.canScrollForward, following) }.collect { (scrolling, canScrollForward, follow) ->
+            if (scrolling) following = !canScrollForward
+            else if (follow && canScrollForward) scrollToEnd(listState)
         }
     }
-    val last = items.lastOrNull()
-    val growth = when (last) {
-        is ChatItem.Assistant -> last.markdown.length
-        is ChatItem.Tools -> last.calls.size
-        else -> 0
-    }
-    LaunchedEffect(items.size, growth) {
-        if (!following || items.isEmpty()) return@LaunchedEffect
-        scrollingItself = true
-        try {
-            listState.scrollToItem(items.lastIndex)
-            listState.scrollBy(Float.MAX_VALUE)
-        } finally {
-            scrollingItself = false
-        }
+}
+
+private suspend fun scrollToEnd(listState: LazyListState) {
+    val last = listState.layoutInfo.totalItemsCount - 1
+    if (last < 0) return
+    try {
+        listState.scrollToItem(last)
+        listState.scrollBy(Float.MAX_VALUE)
+    } catch (e: CancellationException) {
+        // A drag that starts meanwhile takes the list over and cancels this scroll, but must not end the following.
+        currentCoroutineContext().ensureActive()
     }
 }
 
