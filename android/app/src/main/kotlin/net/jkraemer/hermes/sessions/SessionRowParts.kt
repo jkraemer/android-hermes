@@ -18,7 +18,8 @@ import androidx.compose.ui.unit.dp
 import net.jkraemer.hermes.core.sessions.SessionSummary
 
 /** What a session is called in lists: its title, else the start of the conversation. */
-val SessionSummary.displayTitle: String get() = title ?: preview ?: "Untitled"
+val SessionSummary.displayTitle: String
+    get() = title?.takeIf { it.isNotBlank() } ?: preview?.takeIf { it.isNotBlank() } ?: "Untitled"
 
 private fun outlinedIcon(name: String, pathData: String) = ImageVector.Builder(
     name, defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,

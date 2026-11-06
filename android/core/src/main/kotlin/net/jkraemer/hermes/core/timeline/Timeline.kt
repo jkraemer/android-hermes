@@ -36,12 +36,15 @@ fun buildTimeline(
         }
     }
 
-    val byBucket = sessions.sortedByDescending { it.lastActive }.groupBy(::bucketOf)
+    val byBucket = sessions.filter { it.hasMessages }.sortedByDescending { it.lastActive }.groupBy(::bucketOf)
     return Bucket.entries.flatMap { bucket ->
         val inBucket = byBucket[bucket] ?: return@flatMap emptyList()
         listOf<TimelineItem>(TimelineItem.Header(bucket)) + inBucket.map { rowOf(it, lastOpened, seenBaseline, needsAnswer) }
     }
 }
+
+/** A chat that was opened but never written to (e.g. the one on screen right now) has nothing to list. */
+private val SessionSummary.hasMessages: Boolean get() = messageCount > 0
 
 private fun rowOf(session: SessionSummary, lastOpened: Map<String, Instant>, seenBaseline: Instant, needsAnswer: Set<String>) =
     TimelineItem.Row(
@@ -62,7 +65,7 @@ fun buildDrawerEntries(
     seenBaseline: Instant,
     needsAnswer: Set<String>,
 ): DrawerEntries {
-    val (pinned, unpinned) = sessions.sortedByDescending { it.lastActive }.partition { it.pinned }
+    val (pinned, unpinned) = sessions.filter { it.hasMessages }.sortedByDescending { it.lastActive }.partition { it.pinned }
     fun row(session: SessionSummary) = rowOf(session, lastOpened, seenBaseline, needsAnswer)
     return DrawerEntries(pinned.map(::row), unpinned.take(DRAWER_RECENTS).map(::row))
 }

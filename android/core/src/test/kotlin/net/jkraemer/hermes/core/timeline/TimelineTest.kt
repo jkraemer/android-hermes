@@ -131,6 +131,31 @@ class TimelineTest {
     }
 
     @Test
+    fun drawerLeavesOutChatsWithoutMessages() {
+        val empty = session("empty", at(5, 11)).copy(title = "", messageCount = 0)
+        val emptyPinned = session("emptyPinned", at(5, 10), pinned = true).copy(messageCount = 0)
+
+        val entries = drawer(listOf(empty, emptyPinned, session("chat", at(5, 9))))
+
+        assertEquals(listOf("chat"), entries.recents.map { it.session.id })
+        assertEquals(emptyList<String>(), entries.pinned.map { it.session.id })
+    }
+
+    @Test
+    fun drawerRecentsStillCountTenWhenEmptyChatsAreLeftOut() {
+        val sessions = (1..10).map { session("s$it", at(5, 1, it)) } + session("empty", at(5, 11)).copy(messageCount = 0)
+
+        assertEquals((10 downTo 1).map { "s$it" }, drawer(sessions).recents.map { it.session.id })
+    }
+
+    @Test
+    fun timelineLeavesOutChatsWithoutMessages() {
+        val empty = session("empty", at(5, 11)).copy(title = "", messageCount = 0)
+
+        assertEquals(listOf("chat"), build(listOf(empty, session("chat", at(5, 9)))).rows().map { it.session.id })
+    }
+
+    @Test
     fun drawerRowsCarryTheUnreadAndNeedsAnswerFlags() {
         val read = session("read", at(5, 9))
         val unread = session("unread", at(5, 11))

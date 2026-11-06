@@ -222,6 +222,14 @@ class SessionListScreenTest {
     }
 
     @Test
+    fun blankTitleFallsBackLikeAMissingOne() {
+        show(session("a", title = " ", preview = ""), session("b", title = "", preview = "At 75% you'd want"))
+        waitForText("Untitled")
+        compose.onNodeWithText("Untitled").assertIsDisplayed()
+        compose.onNodeWithText("At 75% you'd want").assertIsDisplayed()
+    }
+
+    @Test
     @Config(qualifiers = "w411dp-h1200dp")
     fun showsBucketHeaders() {
         show(
