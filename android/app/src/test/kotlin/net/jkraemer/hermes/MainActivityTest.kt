@@ -496,4 +496,14 @@ class MainActivityTest {
             awaitTag("sessions-screen")
         }
     }
+
+    @Test
+    fun theWindowResizesForTheKeyboardSoComposeAppliesItsInsetOnlyOnce() {
+        val app = RuntimeEnvironment.getApplication()
+        val info = app.packageManager.getActivityInfo(android.content.ComponentName(app, MainActivity::class.java), 0)
+        assertEquals(
+            android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE,
+            info.softInputMode and android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST,
+        )
+    }
 }

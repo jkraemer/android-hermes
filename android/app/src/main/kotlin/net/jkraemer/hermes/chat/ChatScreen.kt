@@ -15,7 +15,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -61,6 +64,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -87,7 +91,7 @@ import kotlinx.coroutines.ensureActive
  * [cron] is whether this chat is a cron run, whose first message is the job's prompt and is shown collapsed.
  * [onOpenMenu] opens the navigation drawer, [onNewChat] starts another chat.
  * [onStoredSessionId] reports the stored id a new chat got, so the app can track the chat under it. */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     viewModel: ChatViewModel,
@@ -97,6 +101,7 @@ fun ChatScreen(
     onRetryConnect: () -> Unit,
     onStoredSessionId: (String) -> Unit,
     clock: () -> Instant = Instant::now,
+    keyboardVisible: Boolean = WindowInsets.isImeVisible,
 ) {
     val chat by viewModel.chat.collectAsStateWithLifecycle()
     val connection by viewModel.connection.collectAsStateWithLifecycle()
@@ -141,6 +146,7 @@ fun ChatScreen(
                 canSend = ready && chat.liveSessionId != null,
                 onSend = viewModel::send,
                 onStop = viewModel::interrupt,
+                keyboardVisible = keyboardVisible,
                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
             )
         }
@@ -342,11 +348,20 @@ private fun Composer(
     canSend: Boolean,
     onSend: (String) -> Unit,
     onStop: () -> Unit,
+    keyboardVisible: Boolean,
     modifier: Modifier = Modifier,
     leading: @Composable RowScope.() -> Unit = {},
 ) {
     var text by rememberSaveable { mutableStateOf("") }
     var focused by remember { mutableStateOf(false) }
+    // Closing the keyboard (back, or its hide key) leaves the field focused; let go of the focus
+    // then, so an empty composer folds back into its one-row pill.
+    val focusManager = LocalFocusManager.current
+    var keyboardWasVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(keyboardVisible) {
+        if (keyboardWasVisible && !keyboardVisible) focusManager.clearFocus()
+        keyboardWasVisible = keyboardVisible
+    }
     val expanded = focused || text.isNotEmpty()
     val sendOrStop = @Composable {
         if (running) {

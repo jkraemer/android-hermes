@@ -80,6 +80,7 @@ class ChatScreenTest {
                     onRetryConnect = { reconnects++ },
                     onStoredSessionId = { storedIds += it },
                     clock = { NOW },
+                    keyboardVisible = keyboardVisible.value,
                 )
             }
         }
@@ -566,6 +567,8 @@ class ChatScreenTest {
         assertTrue("button ${button.bounds()} is below the field $field", button.bounds().top >= field.bottom)
     }
 
+    private val keyboardVisible = androidx.compose.runtime.mutableStateOf(false)
+
     private fun clearFocus() {
         compose.runOnIdle { focusManager.clearFocus() }
         compose.waitForIdle()
@@ -599,6 +602,34 @@ class ChatScreenTest {
 
         clearFocus()
         assertBesideTheField(compose.onNodeWithContentDescription("Send"))
+    }
+
+    @Test
+    fun hidingTheKeyboardCollapsesAnEmptyComposer() {
+        showOpenChat()
+        compose.onNodeWithTag("composer").requestFocus()
+        compose.runOnIdle { keyboardVisible.value = true }
+        compose.waitForIdle()
+        assertBelowTheField(compose.onNodeWithContentDescription("Send"))
+
+        // Back or the keyboard's hide key closes the keyboard but leaves the field focused.
+        compose.runOnIdle { keyboardVisible.value = false }
+        compose.waitForIdle()
+
+        assertBesideTheField(compose.onNodeWithContentDescription("Send"))
+    }
+
+    @Test
+    fun hidingTheKeyboardKeepsAComposerWithTextExpanded() {
+        showOpenChat()
+        compose.onNodeWithTag("composer").performTextInput("hello")
+        compose.runOnIdle { keyboardVisible.value = true }
+        compose.waitForIdle()
+
+        compose.runOnIdle { keyboardVisible.value = false }
+        compose.waitForIdle()
+
+        assertBelowTheField(compose.onNodeWithContentDescription("Send"))
     }
 
     @Test
