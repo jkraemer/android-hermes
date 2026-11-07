@@ -159,13 +159,62 @@ class SessionsApiTest {
         assertEquals("true", body.getValue("pinned").toString())
     }
 
+    private fun enqueueMessages(vararg messages: String) {
+        server.enqueue(MockResponse().setBody("""{"session_id":"s1","messages":[${messages.joinToString(",")}],"pagination":{}}"""))
+    }
+
+    @Test
+    fun finalReplyReadsTheLatestPageOfMessages() = runBlocking {
+        enqueueMessages()
+
+        api.finalReply("a/b")
+
+        val url = server.takeRequest().requestUrl!!
+        assertEquals("/api/sessions/a%2Fb/messages", url.encodedPath)
+        assertEquals("latest", url.queryParameter("order"))
+        assertEquals("10", url.queryParameter("limit"))
+    }
+
+    @Test
+    fun finalReplyIsTheLastAssistantMessageWithText() = runBlocking {
+        enqueueMessages(
+            """{"role":"user","content":"[IMPORTANT: You are running as a scheduled cron job.]"}""",
+            """{"role":"assistant","content":"Let me check."}""",
+            """{"role":"assistant","content":"","tool_calls":[{"id":"t1"}]}""",
+            """{"role":"tool","content":"{\"total_count\": 0}"}""",
+            """{"role":"assistant","content":"Two new mails.\n\n- one\n- two"}""",
+            """{"role":"assistant","content":"  "}""",
+            """{"role":"tool","content":"ok"}""",
+        )
+
+        assertEquals("Two new mails.\n\n- one\n- two", api.finalReply("s1"))
+    }
+
+    @Test
+    fun finalReplyPrefersTheDisplayTextAndSkipsContentThatIsNotText() = runBlocking {
+        enqueueMessages(
+            """{"role":"assistant","text":"Shown text","content":"stored text"}""",
+            """{"role":"assistant","content":[{"type":"image_url"}]}""",
+        )
+
+        assertEquals("Shown text", api.finalReply("s1"))
+    }
+
+    @Test
+    fun finalReplyIsNullWithoutAnAssistantMessage() = runBlocking {
+        enqueueMessages("""{"role":"user","content":"prompt"}""", """{"role":"tool","content":"ok"}""")
+
+        assertEquals(null, api.finalReply("s1"))
+    }
+
     @Test
     fun unauthorizedThrowsNotLoggedIn() {
-        repeat(3) { server.enqueue(MockResponse().setResponseCode(401)) }
+        repeat(4) { server.enqueue(MockResponse().setResponseCode(401)) }
         val calls = listOf<suspend () -> Unit>(
             { api.list() },
             { api.search("q") },
             { api.update("s1", title = "x") },
+            { api.finalReply("s1") },
         )
         for (call in calls) {
             try {

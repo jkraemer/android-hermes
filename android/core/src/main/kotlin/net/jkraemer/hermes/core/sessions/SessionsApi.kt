@@ -5,12 +5,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
-import net.jkraemer.hermes.core.auth.NotLoggedInException
+import net.jkraemer.hermes.core.bodyOf
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -58,6 +60,17 @@ private data class ListResponse(val sessions: List<SessionRow>, val total: Int =
 
 @Serializable
 private data class SearchResponse(val results: List<SessionRow>)
+
+/** A transcript message; [content] is a list of parts for a message that is not plain text. */
+@Serializable
+private data class MessageRow(val role: String? = null, val text: String? = null, val content: JsonElement? = null) {
+    /** What the transcript shows, as the chat reads it: [text], else plain-text [content]. */
+    val displayText: String?
+        get() = text ?: (content as? JsonPrimitive)?.takeIf { it.isString }?.content
+}
+
+@Serializable
+private data class MessagesResponse(val messages: List<MessageRow>)
 
 /** Session list, search and sidebar updates. [client] must carry the dashboard session cookies. */
 class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient) {
@@ -108,16 +121,26 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
             }.toString()
             val url = baseUrl.newBuilder().addPathSegments("api/sessions").addPathSegment(id).build()
             val request = Request.Builder().url(url).patch(body.toRequestBody(jsonMediaType)).build()
-            execute(request)
+            client.bodyOf(request)
             Unit
         }
 
-    private fun get(url: HttpUrl): String = execute(Request.Builder().url(url).build())
+    /**
+     * The text of the session's last assistant message that has any: for a finished cron run, the reply it
+     * delivered. Only the latest few messages are read, since a run ends with its reply. Null when there is none.
+     */
+    suspend fun finalReply(id: String): String? = withContext(Dispatchers.IO) {
+        val url = baseUrl.newBuilder().addPathSegments("api/sessions").addPathSegment(id).addPathSegment("messages")
+            .addQueryParameter("order", "latest")
+            .addQueryParameter("limit", FINAL_REPLY_PAGE.toString())
+            .build()
+        // The latest page comes in chronological order, newest last.
+        json.decodeFromString<MessagesResponse>(get(url)).messages.lastOrNull { it.role == "assistant" && !it.displayText.isNullOrBlank() }?.displayText
+    }
 
-    private fun execute(request: Request): String =
-        client.newCall(request).execute().use { response ->
-            if (response.code == 401 || response.code == 403) throw NotLoggedInException()
-            check(response.isSuccessful) { "${request.method} ${request.url.encodedPath} failed with ${response.code}" }
-            response.body!!.string()
-        }
+    private fun get(url: HttpUrl): String = client.bodyOf(Request.Builder().url(url).build())
+
+    private companion object {
+        const val FINAL_REPLY_PAGE = 10
+    }
 }
