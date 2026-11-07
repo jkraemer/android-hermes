@@ -94,6 +94,9 @@ internal class FakeSource(
     /** When set, final replies wait for it. */
     var replyGate: CompletableDeferred<Unit>? = null
 
+    /** The session ids of the replies asked for. */
+    val replyCalls = CopyOnWriteArrayList<String>()
+
     /** Runs whose final reply fails to load. */
     var failingReplies = emptySet<String>()
 
@@ -151,6 +154,7 @@ internal class FakeSource(
             repliesInFlight++
             mostRepliesInFlight = maxOf(mostRepliesInFlight, repliesInFlight)
         }
+        replyCalls += run.sessionId
         try {
             replyGate?.await()
             if (run.sessionId in failingReplies) throw IOException("reply of ${run.sessionId} failed")

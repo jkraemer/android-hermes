@@ -47,21 +47,35 @@ class JobFeedViewModel(
     private val replies = mutableMapOf<String, String>()
     private var load: Job? = null
 
+    /** Whether the screen has been shown; it loads when created, so only later showings load again. */
+    private var shownBefore = false
+
     init {
         refresh()
     }
 
     /** Reads the job's runs again, and the replies of those not read before. */
-    fun refresh() {
+    fun refresh() = load(quietly = false)
+
+    /**
+     * The screen is shown, after it was left for something else. The first time, the feed is loading already;
+     * later, its runs are read again quietly: what it shows stays, and only new runs' replies are read.
+     */
+    fun shown() {
+        if (shownBefore) load(quietly = true) else shownBefore = true
+    }
+
+    /** A quiet load shows no progress and, when the runs cannot be read, keeps showing what it has. */
+    private fun load(quietly: Boolean) {
         load?.cancel()
         load = viewModelScope.launch {
-            _state.update { it.copy(loading = true, failed = false) }
+            if (!quietly) _state.update { it.copy(loading = true, failed = false) }
             val runs = try {
                 source.runs(jobId, CronApi.MAX_RUNS).runs
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(loading = false, failed = true) }
+                _state.update { if (quietly) it else it.copy(loading = false, failed = true) }
                 return@launch
             }
             show(runs)

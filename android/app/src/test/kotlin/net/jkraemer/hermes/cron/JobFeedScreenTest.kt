@@ -12,6 +12,7 @@ import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -72,11 +73,13 @@ class JobFeedScreenTest {
     /** Whether the feed is on screen; taking it off and back is what a rotation does to its composition. */
     private val onScreen = mutableStateOf(true)
 
-    private fun show() {
+    /** [restoration], when given, sets the content so that a test can emulate the screen being recreated. */
+    private fun show(restoration: StateRestorationTester? = null) {
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-test", Context.MODE_PRIVATE)
         seen = SeenStore(prefs) { NOW.minusSeconds(30 * 86_400L) }
         viewModel = JobFeedViewModel(source, "j1", seen)
-        compose.setContent {
+        val setContent: (@androidx.compose.runtime.Composable () -> Unit) -> Unit = restoration?.let { it::setContent } ?: compose::setContent
+        setContent {
             if (onScreen.value) MaterialTheme {
                 JobFeedScreen(
                     viewModel,
@@ -237,18 +240,46 @@ class JobFeedScreenTest {
     }
 
     @Test
-    fun showingTheFeedAgainDoesNotReadItsRunsAgain() {
+    fun aRecreatedFeedDoesNotReadItsRunsAgain() {
+        jobWithRuns()
+        val restoration = StateRestorationTester(compose)
+        show(restoration)
+        waitForEntries(3)
+
+        // What a rotation does: the screen is composed anew from its saved state, with the same view model.
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        waitForText("Two new mails.")
+        ShadowLooper.idleMainLooper()
+
+        assertEquals(listOf("j1"), source.runsCalls)
+    }
+
+    @Test
+    fun comingBackToTheFeedReadsItsNewRunsAndKeepsWhatItShows() {
         jobWithRuns()
         show()
         waitForEntries(3)
+        val gate = CompletableDeferred<Unit>()
 
+        // Away, e.g. in a run's chat, while the job ran again.
         onScreen.value = false
         compose.waitForIdle()
+        source.runs = mapOf("j1" to listOf(cronRun("r5", at(7, 11, 30))) + source.runs.getValue("j1"))
+        source.replies = source.replies + ("r5" to "A third mail.")
+        source.replyCalls.clear()
+        source.replyGate = gate
         onScreen.value = true
-        compose.waitForIdle()
-        waitForText("Two new mails.")
 
-        assertEquals(listOf("j1"), source.runsCalls)
+        compose.waitUntil(10_000) { ShadowLooper.idleMainLooper(); source.runsCalls.size == 2 }
+        // While the new reply is on its way, the feed shows what it did, with no progress indicator.
+        assertEquals(listOf("r1", "r2", "r4"), viewModel.state.value.entries.map { it.sessionId })
+        compose.onAllNodes(hasTestTag("feed-loading")).assertCountEquals(0)
+        gate.complete(Unit)
+        waitForEntries(4)
+        assertEquals(listOf("r1", "r2", "r4", "r5"), viewModel.state.value.entries.map { it.sessionId })
+        // Only the new run's reply was read; the others were kept, the silent one's included.
+        assertEquals(listOf("r5"), source.replyCalls)
     }
 
     @Test

@@ -25,9 +25,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -65,6 +67,16 @@ fun JobFeedScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val parsedReplies by viewModel.parsedReplies.collectAsStateWithLifecycle()
     val newest = state.entries.lastOrNull()
+
+    // Saved with the screen, so a recreated screen (a rotation) does not count as shown again, while one that
+    // was left for a run's chat and is back does.
+    var shown by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!shown) {
+            shown = true
+            viewModel.shown()
+        }
+    }
 
     Scaffold(
         modifier = Modifier.testTag("job-feed-screen").imePadding(),
