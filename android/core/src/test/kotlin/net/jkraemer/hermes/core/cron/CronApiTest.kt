@@ -65,7 +65,7 @@ class CronApiTest {
     @Test
     fun runsAreTheJobsRunSessionsNewestFirst() = runBlocking {
         server.enqueue(MockResponse().setBody("""{"runs":[
-            {"id":"local-2","source":"cron","started_at":1794029685.5,"ended_at":null,"scheduler_owned":true,"archived":false,"pinned":0,"cron_job_id":"j1"},
+            {"id":"local-2","source":"cron","started_at":1794029685.5,"last_active":1794029699.0,"ended_at":null,"scheduler_owned":true,"archived":false,"pinned":0,"cron_job_id":"j1"},
             {"id":"cron_output:j1:exec:0","source":"cron_output","started_at":1794029600.0,"archived":false},
             {"id":"cron_j1_20261107_053000","source":"cron","started_at":1794029400.0,"ended_at":1794029410.0,"scheduler_owned":false,"archived":true}
         ],"limit":50}"""))
@@ -78,8 +78,9 @@ class CronApiTest {
         assertNull(url.queryParameter("profile"))
         assertEquals(
             listOf(
-                CronRun("local-2", Instant.ofEpochMilli(1794029685500), running = true, archived = false),
-                CronRun("cron_j1_20261107_053000", Instant.ofEpochSecond(1794029400), running = false, archived = true),
+                CronRun("local-2", Instant.ofEpochMilli(1794029685500), running = true, archived = false, lastActive = Instant.ofEpochSecond(1794029699)),
+                // Without last_active, the run was last active when it started.
+                CronRun("cron_j1_20261107_053000", Instant.ofEpochSecond(1794029400), running = false, archived = true, lastActive = Instant.ofEpochSecond(1794029400)),
             ),
             runs,
         )

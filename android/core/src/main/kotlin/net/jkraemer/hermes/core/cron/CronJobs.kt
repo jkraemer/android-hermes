@@ -37,11 +37,12 @@ fun feedEntries(runs: List<CronRun>, replies: Map<String, String?>): List<ShownR
     runs.filter { !it.archived && !it.running }.mapNotNull { shown(it, replies[it.sessionId]) }.sortedBy { it.time }
 
 /**
- * The runs among [runs] to archive at [now]: those older than [ARCHIVE_AFTER] that were read (ran no later than
- * [seenUntil]) or that were silent, which is never shown and so never read. [replyOf] is asked only for unread ones.
+ * The runs among [runs] to archive at [now]: those last active more than [ARCHIVE_AFTER] ago (a run the user went
+ * on with counts from then) that were read (ran no later than [seenUntil]) or that were silent, which is never
+ * shown and so never read. [replyOf] is asked only for unread ones.
  */
 suspend fun runsToArchive(runs: List<CronRun>, seenUntil: Instant, now: Instant, replyOf: suspend (CronRun) -> String?): List<CronRun> =
-    runs.filter { !it.archived && !it.running && it.startedAt < now.minus(ARCHIVE_AFTER) }
+    runs.filter { !it.archived && !it.running && it.lastActive < now.minus(ARCHIVE_AFTER) }
         .filter { it.startedAt <= seenUntil || replyOf(it)?.let(::isSilent) == true }
 
 private fun shown(run: CronRun, reply: String?): ShownRun? =

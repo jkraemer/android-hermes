@@ -17,9 +17,16 @@ data class CronJob(val id: String, val name: String, val lastRunAt: Instant?)
 
 /**
  * One run of a cron job: the session it ran in. [running] while the scheduler still owns it, so its final reply
- * is not there yet. [archived] runs are hidden from Hermes' session lists.
+ * is not there yet. [archived] runs are hidden from Hermes' session lists. [lastActive] is when anything last
+ * happened in the session, which is later than the run when the user went on with it.
  */
-data class CronRun(val sessionId: String, val startedAt: Instant, val running: Boolean, val archived: Boolean)
+data class CronRun(
+    val sessionId: String,
+    val startedAt: Instant,
+    val running: Boolean,
+    val archived: Boolean,
+    val lastActive: Instant = startedAt,
+)
 
 @Serializable
 private data class JobRow(
@@ -34,6 +41,7 @@ private data class RunRow(
     val id: String,
     val source: String? = null,
     @SerialName("started_at") val startedAt: Double = 0.0,
+    @SerialName("last_active") val lastActive: Double? = null,
     @SerialName("scheduler_owned") val schedulerOwned: Boolean = false,
     val archived: Boolean = false,
 )
@@ -62,11 +70,13 @@ class CronApi(private val baseUrl: HttpUrl, private val client: OkHttpClient) {
             .addQueryParameter("limit", limit.coerceIn(1, MAX_RUNS).toString())
             .build()
         json.decodeFromString<RunsResponse>(get(url)).runs.filter { it.source == "cron" }.map {
-            CronRun(it.id, Instant.ofEpochMilli((it.startedAt * 1000).toLong()), running = it.schedulerOwned, archived = it.archived)
+            CronRun(it.id, it.startedAt.toInstant(), running = it.schedulerOwned, archived = it.archived, lastActive = (it.lastActive ?: it.startedAt).toInstant())
         }
     }
 
     private fun get(url: HttpUrl): String = client.bodyOf(Request.Builder().url(url).build())
+
+    private fun Double.toInstant(): Instant = Instant.ofEpochMilli((this * 1000).toLong())
 
     companion object {
         /** The most runs Hermes lists at once. */

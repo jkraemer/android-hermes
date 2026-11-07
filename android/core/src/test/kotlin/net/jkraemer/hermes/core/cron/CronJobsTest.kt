@@ -117,6 +117,13 @@ class CronJobsTest {
     }
 
     @Test
+    fun aReadRunThatWasContinuedWithinTheWeekStays() = runBlocking {
+        val run = CronRun("continued", now.minus(Duration.ofDays(10)), running = false, archived = false, lastActive = now.minus(Duration.ofDays(1)))
+
+        assertEquals(emptyList<CronRun>(), runsToArchive(listOf(run), seenUntil = now, now, Replies(emptyMap())::of))
+    }
+
+    @Test
     fun aRunExactlyAWeekOldStays() = runBlocking {
         val runs = listOf(CronRun("r1", now.minus(Duration.ofDays(7)), running = false, archived = false))
 
