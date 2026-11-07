@@ -4,9 +4,24 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+### Added
+
+- Cron jobs get one entry each instead of one per run: in a new "Scheduled"
+  section at the top of the drawer, and in the full list on the day the job
+  last reported something. The unread dot shows when there is a new report.
+- Opening a job shows what each of its runs reported, oldest at the top and
+  newest at the bottom. "Show the whole run" opens a run's chat; a message
+  written below the feed continues the newest run's chat.
+
 ### Changed
 
 - The scroll-to-end button scrolls quickly to the end instead of jumping there.
+- Runs that had nothing to report (`[SILENT]`) are no longer shown.
+- A cron run's chat folds everything before its final reply into one
+  "Show work" line, which opens on a tap.
+- Once a day, cron runs older than a week that were read, or that had nothing
+  to report, are archived in Hermes (not deleted), so they also leave the
+  Desktop's and the CLI's session lists.
 
 ## [0.1.1] - 2026-11-06
 
