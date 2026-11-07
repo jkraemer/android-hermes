@@ -56,13 +56,13 @@ sealed interface Screen {
     ) : Screen
 
     /**
-     * The feed of the cron job [jobId] called [name]. [fromList] is the list back returns to, as for a chat; [key]
-     * tells feeds apart.
+     * The feed of the cron job [jobId] called [name]. [back] is the list or the chat it was opened from, which back
+     * returns to; [key] tells feeds apart.
      */
     data class Job(
         val jobId: String,
         val name: String,
-        val fromList: Sessions? = null,
+        val back: Screen? = null,
         val key: String = UUID.randomUUID().toString(),
     ) : Screen
 }

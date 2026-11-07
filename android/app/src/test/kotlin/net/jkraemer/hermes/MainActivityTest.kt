@@ -425,8 +425,10 @@ class MainActivityTest {
         assertEquals(fromList, restore(fromList))
         val cron = Screen.Chat("cron1", "Nightly", cron = true, key = "c")
         assertEquals(cron, restore(cron))
-        val job = Screen.Job("j:1", "Nightly | job", fromList = list, key = "j")
+        val job = Screen.Job("j:1", "Nightly | job", back = list, key = "j")
         assertEquals(job, restore(job))
+        val jobFromAChat = Screen.Job("j:1", "Nightly", back = home, key = "j2")
+        assertEquals(jobFromAChat, restore(jobFromAChat))
         val runFromJob = Screen.Chat("run1", "Nightly", fromList = list, cron = true, fromJob = job, key = "r")
         assertEquals(runFromJob, restore(runFromJob))
         assertEquals(Screen.Sessions(back = job), restore(Screen.Sessions(back = job)))
@@ -487,6 +489,29 @@ class MainActivityTest {
 
             pressBack(scenario)
             awaitTag("job-feed-screen")
+        }
+    }
+
+    @Test
+    fun aJobOpenedFromTheDrawerOfTheHomeChatGoesBackToThatChat() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true, cron = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            await(inChat("Sourdough"))
+            openDrawerEntry("Nightly")
+            awaitTag("job-feed-screen")
+
+            var finishing = false
+            scenario.onActivity {
+                it.onBackPressedDispatcher.onBackPressed()
+                finishing = it.isFinishing
+            }
+
+            assertTrue("back left the app", !finishing)
+            awaitTag("chat-screen")
+            await(inChat("Sourdough"))
+            compose.waitUntil(10_000) { rpcCalls("session.resume").count { it["session_id"]?.jsonPrimitive?.content == "id-Sourdough" } == 2 }
         }
     }
 

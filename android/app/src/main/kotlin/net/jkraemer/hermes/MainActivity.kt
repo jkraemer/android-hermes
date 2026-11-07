@@ -72,14 +72,19 @@ private fun Screen.toJson(): JSONObject = when (this) {
         fromJob?.let { put("job", it.toJson()) }
     }
     is Screen.Job -> JSONObject().put("screen", "job").put("key", key).put("id", jobId).put("name", name).apply {
-        fromList?.let { put("from", it.toJson()) }
+        back?.let { put("back", it.toJson()) }
     }
 }
 
 private fun JSONObject.toScreen(): Screen = when (getString("screen")) {
     "login" -> Screen.Login
     "sessions" -> Screen.Sessions(optJSONObject("back")?.toScreen()?.also { require(it is Screen.Chat || it is Screen.Job) })
-    "job" -> Screen.Job(getString("id"), getString("name"), optJSONObject("from")?.toScreen() as Screen.Sessions?, getString("key"))
+    "job" -> Screen.Job(
+        getString("id"),
+        getString("name"),
+        optJSONObject("back")?.toScreen()?.also { require(it is Screen.Sessions || it is Screen.Chat) },
+        getString("key"),
+    )
     else -> Screen.Chat(
         optString("id").ifEmpty { null },
         optString("title").ifEmpty { null },
@@ -159,11 +164,12 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     LaunchedEffect(Unit) { sessionList.refreshQuietly() }
     LaunchedEffect(drawerState.targetValue == DrawerValue.Open) { if (drawerState.targetValue == DrawerValue.Open) sessionList.refreshQuietly() }
 
-    // Back goes from a cron run to the job's feed it was opened from, from a chat or a feed to the list it was
-    // opened from, and from the list to the chat or feed it was opened from; with none it leaves the app.
+    // Back goes from a cron run to the job's feed it was opened from, from a chat to the list it was opened from,
+    // from a feed to the list or chat it was opened from, and from the list to the chat or feed it was opened from;
+    // with none it leaves the app.
     val backTo = when (current) {
         is Screen.Chat -> current.fromJob ?: current.fromList
-        is Screen.Job -> current.fromList
+        is Screen.Job -> current.back
         is Screen.Sessions -> current.back
         else -> null
     }
@@ -177,44 +183,50 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     /** The chat to come back to, opened again with a fresh controller; an unused new chat is just another new chat. */
     fun Screen.Chat.reopened() = Screen.Chat(
         storedSessionId.takeIf { chat?.hasStoredSession == true }, title.takeIf { chat?.hasStoredSession == true },
-        cron = cron, fromJob = fromJob,
+        fromList, cron = cron, fromJob = fromJob,
     )
+
+    /** The list [screen] is, or that it came from, if any. */
+    fun listBehind(screen: Screen?): Screen.Sessions? = when (screen) {
+        is Screen.Sessions -> screen
+        is Screen.Chat -> screen.fromList
+        is Screen.Job -> listBehind(screen.back)
+        else -> null
+    }
 
     fun showList() {
         show(
             when (current) {
                 // A chat or feed that came from the list goes back to that list, which already remembers where it began.
                 is Screen.Chat -> current.fromList ?: Screen.Sessions(back = current.reopened())
-                is Screen.Job -> current.fromList ?: Screen.Sessions(back = current)
+                is Screen.Job -> listBehind(current) ?: Screen.Sessions(back = current)
                 else -> current
             },
         )
         closeDrawer()
     }
 
-    /** The list back returns to from what is opened now: the one the current screen came from, if any. */
-    fun fromList(): Screen.Sessions? = when (current) {
-        is Screen.Sessions -> current
-        is Screen.Chat -> current.fromList
-        is Screen.Job -> current.fromList
-        else -> null
-    }
-
     fun openChat(id: String?, title: String?, cron: Boolean) {
         sessionList.closeSearch()
-        show(Screen.Chat(id, title, fromList(), cron = cron))
+        show(Screen.Chat(id, title, listBehind(current), cron = cron))
         closeDrawer()
     }
 
+    /** A feed goes back to where it was opened; one opened from another feed, to where that one was opened. */
     fun openJob(jobId: String, name: String) {
         sessionList.closeSearch()
-        show(Screen.Job(jobId, name, fromList()))
+        val back = when (current) {
+            is Screen.Chat -> current.reopened()
+            is Screen.Job -> current.back
+            else -> current
+        }
+        show(Screen.Job(jobId, name, back))
         closeDrawer()
     }
 
     /** Opens a run of the job on screen, whose back returns to the job; [message] is sent in it once it is open. */
     fun openRun(job: Screen.Job, sessionId: String, message: String? = null) =
-        show(Screen.Chat(sessionId, job.name, job.fromList, cron = true, fromJob = job, pendingMessage = message))
+        show(Screen.Chat(sessionId, job.name, listBehind(job), cron = true, fromJob = job, pendingMessage = message))
 
     ModalNavigationDrawer(
         drawerContent = {
