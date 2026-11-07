@@ -4,20 +4,26 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import net.jkraemer.hermes.core.auth.FileCookieStore
 import net.jkraemer.hermes.core.auth.HermesAuth
 import net.jkraemer.hermes.core.auth.LoginResult
 import net.jkraemer.hermes.core.auth.PersistentCookieJar
 import net.jkraemer.hermes.core.chat.ChatController
+import net.jkraemer.hermes.core.cron.CronApi
 import net.jkraemer.hermes.core.rpc.RpcConnection
 import net.jkraemer.hermes.core.sessions.SessionsApi
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.junit.Assert.assertEquals
 import java.io.File
 import java.net.InetAddress
 import java.net.Socket
+import java.time.Duration
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.net.SocketFactory
 
@@ -45,6 +51,18 @@ class E2eClient private constructor(cookieFile: File) : AutoCloseable {
 
     val rpc = RpcConnection(httpClient, baseUrl, auth::mintWsTicket, scope)
     val sessions = SessionsApi(baseUrl, httpClient)
+    val cron = CronApi(baseUrl, httpClient)
+
+    /** A REST call the app itself does not make, e.g. to set up a cron job; it may take as long as a model turn. */
+    suspend fun rest(method: String, path: String, json: String? = null): String = withContext(Dispatchers.IO) {
+        val body = json?.toRequestBody("application/json".toMediaType()) ?: if (method == "POST") ByteArray(0).toRequestBody() else null
+        val request = Request.Builder().url(baseUrl.newBuilder().addPathSegments(path).build()).method(method, body).build()
+        httpClient.newBuilder().readTimeout(Duration.ofMinutes(5)).build().newCall(request).execute().use { response ->
+            val text = response.body!!.string()
+            check(response.isSuccessful) { "$method $path failed with ${response.code}: $text" }
+            text
+        }
+    }
 
     /** Created before any session is opened, so no event or request is missed. */
     fun newChat(): ChatController = ChatController(rpc, scope).also { controllers += it }
