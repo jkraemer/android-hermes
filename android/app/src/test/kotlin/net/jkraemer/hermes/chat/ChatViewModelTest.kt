@@ -178,13 +178,29 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun aPendingMessageIsSentOnlyOnceWhenTheChatOpensAgain() {
-        viewModel(pendingMessage = "hello")
+    fun aPendingMessageIsSentOnlyOnceWhenTheChatIsOpenedAgain() {
+        val chat = viewModel(pendingMessage = "hello")
         settleUntil { submitted().isNotEmpty() }
 
-        peer.state.value = ConnectionState.Connecting
+        chat.retryOpen()
+        settleUntil { peer.calls.count { it.first == "session.resume" } == 2 }
         settle()
-        peer.state.value = ConnectionState.Ready
+
+        assertEquals(listOf("hello"), submitted())
+    }
+
+    @Test
+    fun aPendingMessageWaitsForARetryAfterAFailedOpenAndIsSentOnce() {
+        peer.refusing = setOf("session.resume")
+        val chat = viewModel(pendingMessage = "hello")
+        settleUntil { chat.openFailed.value }
+        assertEquals(emptyList<String>(), submitted())
+
+        peer.refusing = emptySet()
+        chat.retryOpen()
+        settleUntil { submitted().isNotEmpty() }
+        chat.retryOpen()
+        settleUntil { peer.calls.count { it.first == "session.resume" } == 3 }
         settle()
 
         assertEquals(listOf("hello"), submitted())
