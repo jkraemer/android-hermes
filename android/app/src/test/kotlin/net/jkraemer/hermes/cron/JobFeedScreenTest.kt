@@ -260,6 +260,8 @@ class JobFeedScreenTest {
         jobWithRuns()
         show()
         waitForEntries(3)
+        // The entries come from the view model, which loads on its own; the screen's effects run with its frames.
+        compose.waitForIdle()
         val gate = CompletableDeferred<Unit>()
 
         // Away, e.g. in a run's chat, while the job ran again.
@@ -270,6 +272,8 @@ class JobFeedScreenTest {
         source.replyCalls.clear()
         source.replyGate = gate
         onScreen.value = true
+        // A state written outside composition reaches the recomposer once the test lets the UI settle.
+        compose.waitForIdle()
 
         compose.waitUntil(10_000) { ShadowLooper.idleMainLooper(); source.runsCalls.size == 2 }
         // While the new reply is on its way, the feed shows what it did, with no progress indicator.
