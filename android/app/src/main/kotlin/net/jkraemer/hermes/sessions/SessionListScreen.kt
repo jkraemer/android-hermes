@@ -66,6 +66,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import java.time.Clock
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import net.jkraemer.hermes.core.cron.CronJobSummary
 import net.jkraemer.hermes.core.sessions.SearchHit
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.Snippet
@@ -91,7 +92,8 @@ private val Bucket.title: String
 
 /**
  * [onOpenMenu] opens the navigation drawer, [onOpenChat] gets the stored session id, its title and whether
- * it is a cron run, or nulls for a new chat. [clock] decides how recent "ago" is.
+ * it is a cron run, or nulls for a new chat; [onOpenJob] gets a cron job's id and name. [clock] decides how
+ * recent "ago" is.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -100,6 +102,7 @@ fun SessionListScreen(
     host: String,
     onOpenMenu: () -> Unit,
     onOpenChat: (id: String?, title: String?, cron: Boolean) -> Unit,
+    onOpenJob: (jobId: String, name: String) -> Unit,
     onNotLoggedIn: () -> Unit,
     onRetryConnect: () -> Unit,
     clock: Clock = Clock.systemDefaultZone(),
@@ -153,12 +156,14 @@ fun SessionListScreen(
                                 SearchResultRow(hit, onOpen = { onOpenChat(hit.session.id, hit.session.title, hit.session.isCron) })
                             }
                         } else {
-                            items(
-                                state.items,
-                                key = { if (it is TimelineItem.Row) it.session.id else (it as TimelineItem.Header).bucket },
-                            ) { item ->
+                            items(state.items, key = TimelineItem::key) { item ->
                                 when (item) {
                                     is TimelineItem.Header -> BucketHeader(item.bucket)
+                                    is TimelineItem.Job -> JobRow(
+                                        item.summary,
+                                        time = item.summary.time?.let { formatSessionTime(it, clock.instant(), clock.zone, locale) }.orEmpty(),
+                                        onOpen = { onOpenJob(item.summary.job.id, item.summary.job.name) },
+                                    )
                                     is TimelineItem.Row -> SessionRow(
                                         item,
                                         time = formatSessionTime(item.session.lastActive, clock.instant(), clock.zone, locale),
@@ -233,6 +238,14 @@ private fun ErrorBanner(message: String, onRetry: () -> Unit) {
     }
 }
 
+/** Session rows by their id, jobs apart from them by theirs, headers by their bucket. */
+private val TimelineItem.key: Any
+    get() = when (this) {
+        is TimelineItem.Header -> bucket
+        is TimelineItem.Row -> session.id
+        is TimelineItem.Job -> "job:" + summary.job.id
+    }
+
 @Composable
 private fun BucketHeader(bucket: Bucket) {
     Text(
@@ -298,6 +311,30 @@ private fun SessionRow(
             renaming = false
             onRename(it)
         })
+    }
+}
+
+/** A cron job, standing for its runs: its name, and when it last reported something. */
+@Composable
+private fun JobRow(summary: CronJobSummary, time: String, onOpen: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onOpen).padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        JobIcon()
+        Spacer(Modifier.width(16.dp))
+        Column(Modifier.weight(1f)) {
+            Text(summary.job.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(
+                time,
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (summary.unread) {
+            Spacer(Modifier.width(12.dp))
+            UnreadDot()
+        }
     }
 }
 

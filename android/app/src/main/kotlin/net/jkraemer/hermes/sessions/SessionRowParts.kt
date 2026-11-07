@@ -48,6 +48,12 @@ fun KindIcon(session: SessionSummary, size: Dp = 24.dp) {
     )
 }
 
+/** The clock a cron job is shown with. */
+@Composable
+fun JobIcon(size: Dp = 24.dp) {
+    Icon(ScheduleIcon, contentDescription = "Cron job", Modifier.size(size), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+}
+
 @Composable
 fun UnreadDot() {
     Box(Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, CircleShape).testTag("unread-dot"))

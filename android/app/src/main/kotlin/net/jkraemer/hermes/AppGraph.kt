@@ -14,6 +14,8 @@ import net.jkraemer.hermes.core.auth.FileCookieStore
 import net.jkraemer.hermes.core.auth.HermesAuth
 import net.jkraemer.hermes.core.auth.NotLoggedInException
 import net.jkraemer.hermes.core.auth.PersistentCookieJar
+import net.jkraemer.hermes.core.cron.CronApi
+import net.jkraemer.hermes.core.cron.FinalReplies
 import net.jkraemer.hermes.core.rpc.RpcConnection
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.SessionsApi
@@ -29,14 +31,19 @@ import java.util.UUID
 sealed interface Screen {
     data object Login : Screen
 
-    /** The full session list; back returns to [back], the chat it was opened from, and leaves the app when there is none. */
-    data class Sessions(val back: Chat? = null) : Screen
+    /**
+     * The full session list; back returns to [back], the chat or cron job it was opened from, and leaves the app
+     * when there is none.
+     */
+    data class Sessions(val back: Screen? = null) : Screen
 
     /**
      * [storedSessionId] null starts a new chat; [title] is the one the session list showed. [fromList]
      * is the list back returns to, if the chat was opened from one. [key] tells chats apart, so
      * opening another chat from a chat gets a fresh controller; it is kept when a new chat learns its id.
-     * [cron] is whether the session is a cron run, whose first message is the job's prompt.
+     * [cron] is whether the session is a cron run, whose first message is the job's prompt. [fromJob] is the cron
+     * job's feed the run was opened from, which back returns to first. [pendingMessage] is sent once the chat is
+     * open; it is not saved with the screen, since by then it has been sent.
      */
     data class Chat(
         val storedSessionId: String?,
@@ -44,6 +51,19 @@ sealed interface Screen {
         val fromList: Sessions? = null,
         val key: String = UUID.randomUUID().toString(),
         val cron: Boolean = false,
+        val fromJob: Job? = null,
+        val pendingMessage: String? = null,
+    ) : Screen
+
+    /**
+     * The feed of the cron job [jobId] called [name]. [fromList] is the list back returns to, as for a chat; [key]
+     * tells feeds apart.
+     */
+    data class Job(
+        val jobId: String,
+        val name: String,
+        val fromList: Sessions? = null,
+        val key: String = UUID.randomUUID().toString(),
     ) : Screen
 }
 
@@ -68,7 +88,13 @@ fun launchScreen(sessions: List<SessionSummary>, now: Instant): Screen {
  * server clients built for that URL.
  */
 class AppGraph(context: Context) {
-    private class Services(val auth: HermesAuth, val sessions: SessionsApi, val rpc: RpcConnection)
+    private class Services(
+        val auth: HermesAuth,
+        val sessions: SessionsApi,
+        val rpc: RpcConnection,
+        val cron: CronApi,
+        val finalReplies: FinalReplies,
+    )
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -105,10 +131,17 @@ class AppGraph(context: Context) {
     val auth: HermesAuth get() = requireServices().auth
     val sessions: SessionsApi get() = requireServices().sessions
     val rpc: RpcConnection get() = requireServices().rpc
+    val cron: CronApi get() = requireServices().cron
+
+    /** The cron runs' final replies, kept while the server stays the same. */
+    val finalReplies: FinalReplies get() = requireServices().finalReplies
 
     private fun buildServices(url: HttpUrl): Services {
         val auth = HermesAuth(url, client)
-        return Services(auth, SessionsApi(url, client), RpcConnection(client, url, auth::mintWsTicket, scope, log = log))
+        val sessions = SessionsApi(url, client)
+        return Services(
+            auth, sessions, RpcConnection(client, url, auth::mintWsTicket, scope, log = log), CronApi(url, client), FinalReplies(sessions::finalReply),
+        )
     }
 
     private fun requireServices() = checkNotNull(services) { "No server URL is set" }

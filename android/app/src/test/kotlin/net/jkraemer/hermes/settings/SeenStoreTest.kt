@@ -33,4 +33,27 @@ class SeenStoreTest {
             SeenStore(prefs).lastOpened(),
         )
     }
+
+    @Test
+    fun remembersHowFarEachJobWasSeenAndNeverGoesBack() {
+        val store = SeenStore(prefs)
+        store.markJobSeen("j:1", Instant.parse("2026-11-04T10:00:00Z"))
+        store.markJobSeen("j2", Instant.parse("2026-11-05T10:00:00Z"))
+        store.markJobSeen("j:1", Instant.parse("2026-11-03T10:00:00Z"))
+
+        val again = SeenStore(prefs)
+        assertEquals(Instant.parse("2026-11-04T10:00:00Z"), again.jobSeenUntil("j:1"))
+        assertEquals(Instant.parse("2026-11-05T10:00:00Z"), again.jobSeenUntil("j2"))
+        assertEquals(null, again.jobSeenUntil("j3"))
+    }
+
+    @Test
+    fun remembersWhenRunsWereLastArchived() {
+        val store = SeenStore(prefs)
+        assertEquals(null, store.lastArchivePass())
+
+        store.markArchivePass(Instant.parse("2026-11-04T10:00:00Z"))
+
+        assertEquals(Instant.parse("2026-11-04T10:00:00Z"), SeenStore(prefs).lastArchivePass())
+    }
 }

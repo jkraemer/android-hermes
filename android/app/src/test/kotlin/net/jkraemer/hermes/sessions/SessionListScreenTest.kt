@@ -33,6 +33,8 @@ import net.jkraemer.hermes.core.sessions.SessionPage
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.Snippet
 import net.jkraemer.hermes.settings.SeenStore
+import net.jkraemer.hermes.core.cron.CronJob
+import net.jkraemer.hermes.core.cron.CronRun
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -45,6 +47,7 @@ import java.io.IOException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.concurrent.CopyOnWriteArrayList
 
 internal val NOW = Instant.parse("2026-11-05T12:00:00Z")
 
@@ -59,14 +62,37 @@ internal fun session(
 
 internal fun hit(session: SessionSummary, snippet: Snippet? = null) = SearchHit(session, snippet)
 
+/** A finished run of a cron job at [time]. */
+internal fun cronRun(id: String, time: Instant, archived: Boolean = false) = CronRun(id, time, running = false, archived = archived)
+
+internal fun cronJob(id: String, name: String = id, lastRunAt: Instant? = null) = CronJob(id, name, lastRunAt)
+
 internal class FakeSource(
     var sessions: List<SessionSummary> = emptyList(),
     var total: Int = sessions.size,
     var searchResults: List<SearchHit> = emptyList(),
     var failure: Exception? = null,
+    var jobs: List<CronJob> = emptyList(),
+    /** Each job's runs by its id, newest first. */
+    var runs: Map<String, List<CronRun>> = emptyMap(),
+    /** The final replies by session id; a run missing from it has none. */
+    var replies: Map<String, String> = emptyMap(),
 ) : SessionListSource {
     val updates = mutableListOf<List<Any?>>()
     val listCalls = mutableListOf<Int>()
+    val runsCalls = CopyOnWriteArrayList<String>()
+
+    /** Runs whose archiving fails. */
+    var unarchivable = emptySet<String>()
+
+    /** When set, loading the cron jobs fails with it. */
+    var jobsFailure: Exception? = null
+
+    /** When set, final replies wait for it. */
+    var replyGate: CompletableDeferred<Unit>? = null
+
+    /** Runs whose final reply fails to load. */
+    var failingReplies = emptySet<String>()
 
     /** When set, a reload of the first page waits for it. */
     var firstPageGate: CompletableDeferred<Unit>? = null
@@ -89,7 +115,25 @@ internal class FakeSource(
         return searchResults
     }
 
+    override suspend fun jobs(): List<CronJob> {
+        (jobsFailure ?: failure)?.let { throw it }
+        return jobs
+    }
+
+    override suspend fun runs(jobId: String, limit: Int): List<CronRun> {
+        failure?.let { throw it }
+        runsCalls += jobId
+        return runs[jobId].orEmpty().take(limit)
+    }
+
+    override suspend fun finalReply(run: CronRun): String? {
+        replyGate?.await()
+        if (run.sessionId in failingReplies) throw IOException("reply of ${run.sessionId} failed")
+        return replies[run.sessionId]
+    }
+
     override suspend fun update(id: String, title: String?, pinned: Boolean?, archived: Boolean?) {
+        if (id in unarchivable) throw IOException("archiving $id failed")
         updates += listOf(id, title, pinned, archived)
         sessions = sessions.map { if (it.id == id) it.copy(pinned = pinned ?: it.pinned) else it }
     }
@@ -103,6 +147,7 @@ class SessionListScreenTest {
     private val needsAnswer = MutableStateFlow(emptySet<String>())
     private val opened = mutableListOf<Pair<String?, String?>>()
     private val openedCron = mutableListOf<Boolean>()
+    private val openedJobs = mutableListOf<Pair<String, String>>()
     private var loggedOut = 0
     private var reconnects = 0
     private var menus = 0
@@ -130,6 +175,7 @@ class SessionListScreenTest {
                         opened += id to title
                         openedCron += cron
                     },
+                    onOpenJob = { id, name -> openedJobs += id to name },
                     onNotLoggedIn = { loggedOut++ },
                     onRetryConnect = { reconnects++ },
                 )
@@ -159,13 +205,76 @@ class SessionListScreenTest {
         assertEquals(root.center.x, bar.center.x, 2f)
     }
 
+    /** A job "morning" called [name] whose run 5 minutes ago reported [reply]. */
+    private fun oneJob(name: String = "Morning briefing", reply: String = "Two new mails.") {
+        source.jobs = listOf(cronJob("morning", name))
+        source.runs = mapOf("morning" to listOf(cronRun("run1", NOW.minusSeconds(5 * 60))))
+        source.replies = mapOf("run1" to reply)
+    }
+
     @Test
-    fun cronRowsShowAClockIconAndOtherRowsAChatIconInsteadOfATag() {
-        show(session("a", title = "Morning briefing", source = "cron"), session("b", title = "Chatty"))
+    fun jobRowsShowAClockIconAndChatRowsAChatIconInsteadOfATag() {
+        oneJob()
+        show(session("b", title = "Chatty"))
         waitForText("Morning briefing")
-        assertEquals(1, hasCount("Cron run"))
+        assertEquals(1, hasCount("Cron job"))
         assertEquals(1, hasCount("Chat"))
         compose.onAllNodes(hasText("cron")).assertCountEquals(0)
+    }
+
+    @Test
+    fun cronRunsAreNotListedThemselves() {
+        show(session("a", title = "Nightly · Nov 05 11:58", source = "cron"), session("b", title = "Chatty"))
+        waitForText("Chatty")
+        compose.onAllNodes(hasText("Nightly", substring = true)).assertCountEquals(0)
+        assertEquals(0, hasCount("Cron run"))
+    }
+
+    @Test
+    fun aJobRowShowsTheTimeItLastReportedSomethingAndTheUnreadDot() {
+        source.jobs = listOf(cronJob("morning", "Morning briefing"))
+        source.runs = mapOf("morning" to listOf(cronRun("run2", NOW.minusSeconds(60)), cronRun("run1", NOW.minusSeconds(5 * 60))))
+        source.replies = mapOf("run2" to "[SILENT]", "run1" to "Two new mails.")
+        show()
+        waitForText("Morning briefing")
+        compose.onNodeWithText("5 minutes ago").assertIsDisplayed()
+        compose.onAllNodes(hasText("Two new mails.")).assertCountEquals(0)
+        compose.onAllNodes(hasTestTag("unread-dot"), useUnmergedTree = true).assertCountEquals(1)
+    }
+
+    @Test
+    fun aJobSeenUpToItsNewestShownRunHasNoDot() {
+        oneJob()
+        show()
+        seen.markJobSeen("morning", NOW.minusSeconds(5 * 60))
+        viewModel.refresh()
+        compose.waitUntil(10_000) {
+            compose.onAllNodes(hasTestTag("unread-dot"), useUnmergedTree = true).fetchSemanticsNodes().isEmpty()
+        }
+        compose.onNodeWithText("Morning briefing").assertIsDisplayed()
+    }
+
+    @Test
+    fun aJobThatNeverReportedAnythingIsNotListed() {
+        oneJob(name = "Attention Check", reply = "[SILENT]")
+        show(session("b", title = "Chatty"))
+        waitForText("Chatty")
+        compose.waitUntil(10_000) { source.runsCalls.isNotEmpty() }
+        compose.waitForIdle()
+        compose.onAllNodes(hasText("Attention Check")).assertCountEquals(0)
+    }
+
+    @Test
+    @Config(qualifiers = "w411dp-h1200dp")
+    fun aJobSitsInTheDayOfItsLastReportAmongTheChats() {
+        source.jobs = listOf(cronJob("nightly", "Nightly"))
+        source.runs = mapOf("nightly" to listOf(cronRun("run1", NOW.minusSeconds(86_400))))
+        source.replies = mapOf("run1" to "Backups done.")
+        show(session("a", title = "Today's chat"), session("b", title = "Yesterday's chat", lastActive = NOW.minusSeconds(86_400 - 60)))
+        waitForText("Nightly")
+        val top = { text: String -> compose.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top }
+        assertTrue(top("Yesterday") < top("Yesterday's chat"))
+        assertTrue(top("Yesterday's chat") < top("Nightly"))
     }
 
     @Test
@@ -460,11 +569,13 @@ class SessionListScreenTest {
     }
 
     @Test
-    fun tappingACronRowOpensItAsACronChat() {
-        show(session("a", title = "Nightly", source = "cron"))
+    fun tappingAJobRowOpensTheJob() {
+        oneJob(name = "Nightly")
+        show()
         waitForText("Nightly")
         compose.onNodeWithText("Nightly").performClick()
-        assertEquals(listOf(true), openedCron)
+        assertEquals(listOf("morning" to "Nightly"), openedJobs)
+        assertEquals(emptyList<Pair<String?, String?>>(), opened)
     }
 
     @Test

@@ -11,7 +11,7 @@ import java.time.Instant
 
 class CronJobsTest {
     private val now = Instant.parse("2026-11-07T12:00:00Z")
-    private val job = CronJob("j1", "Attention Check")
+    private val job = CronJob("j1", "Attention Check", lastRunAt = null)
 
     private fun run(id: String, hoursAgo: Long, running: Boolean = false, archived: Boolean = false) =
         CronRun(id, now.minus(Duration.ofHours(hoursAgo)), running, archived)
@@ -65,6 +65,15 @@ class CronJobsTest {
 
         assertTrue(summarizeJob(job, runs, seenUntil = now.minus(Duration.ofHours(2)), replies::of).unread)
         assertFalse(summarizeJob(job, runs, seenUntil = runs[0].startedAt, replies::of).unread)
+    }
+
+    @Test
+    fun seeingTheJobLaterUpdatesWhetherItIsUnread() = runBlocking {
+        val runs = listOf(run("r1", 1))
+        val summary = summarizeJob(job, runs, seenUntil = now.minus(Duration.ofHours(2)), Replies(mapOf("r1" to "New"))::of)
+
+        assertFalse(summary.seenUpTo(runs[0].startedAt).unread)
+        assertTrue(summary.seenUpTo(runs[0].startedAt).seenUpTo(now.minus(Duration.ofHours(3))).unread)
     }
 
     @Test

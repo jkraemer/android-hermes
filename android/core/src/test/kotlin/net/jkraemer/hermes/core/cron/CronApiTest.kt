@@ -29,9 +29,9 @@ class CronApiTest {
     @Test
     fun jobsListsTheDefaultProfilesJobsWithoutAskingForAProfile() = runBlocking {
         server.enqueue(MockResponse().setBody("""[
-            {"id":"j1","name":"Attention Check","prompt":"/attention-check","schedule":{"kind":"interval"},"is_default_profile":true,"extra":1},
+            {"id":"j1","name":"Attention Check","prompt":"/attention-check","schedule":{"kind":"interval"},"last_run_at":"2026-11-07T05:34:45.326038+00:00","is_default_profile":true,"extra":1},
             {"id":"j2","name":"Other profile's job","is_default_profile":false},
-            {"id":"j3","name":"Older Hermes without the field"}
+            {"id":"j3","name":"Older Hermes without the field","last_run_at":null}
         ]"""))
 
         val jobs = api.jobs()
@@ -39,7 +39,20 @@ class CronApiTest {
         val url = server.takeRequest().requestUrl!!
         assertEquals("/api/cron/jobs", url.encodedPath)
         assertNull(url.queryParameter("profile"))
-        assertEquals(listOf(CronJob("j1", "Attention Check"), CronJob("j3", "Older Hermes without the field")), jobs)
+        assertEquals(
+            listOf(
+                CronJob("j1", "Attention Check", lastRunAt = Instant.parse("2026-11-07T05:34:45.326038Z")),
+                CronJob("j3", "Older Hermes without the field", lastRunAt = null),
+            ),
+            jobs,
+        )
+    }
+
+    @Test
+    fun anUnreadableLastRunTimeIsNone() = runBlocking {
+        server.enqueue(MockResponse().setBody("""[{"id":"j1","name":"x","last_run_at":"yesterday"}]"""))
+
+        assertNull(api.jobs().single().lastRunAt)
     }
 
     @Test

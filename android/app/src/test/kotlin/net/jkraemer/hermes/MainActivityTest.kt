@@ -12,6 +12,8 @@ import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
 import androidx.lifecycle.Lifecycle
 import androidx.test.core.app.ActivityScenario
@@ -77,11 +79,32 @@ class MainActivityTest {
         graph.close()
     }
 
-    /** Points the app at a fake server whose `api/auth/me` answers with [me]; everything else is a 404. */
-    private fun serverAnswering(me: Int, wsTicket: Int = 404, sessions: String? = null, gateway: Boolean = false, transcript: String = "[]") {
+    /**
+     * Points the app at a fake server whose `api/auth/me` answers with [me]; everything else is a 404. [search] answers
+     * every search; [cron] is the one cron job "Nightly" (id `j1`) with one run, `run1`, that reported "Backups done.".
+     */
+    private fun serverAnswering(
+        me: Int,
+        wsTicket: Int = 404,
+        sessions: String? = null,
+        gateway: Boolean = false,
+        transcript: String = "[]",
+        search: String? = null,
+        cron: Boolean = false,
+    ) {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-                if (request.path?.startsWith("/api/sessions?") == true && sessions != null) return MockResponse().setBody(sessions)
+                val path = request.path.orEmpty()
+                if (path.startsWith("/api/sessions?") && sessions != null) return MockResponse().setBody(sessions)
+                if (path.startsWith("/api/sessions/search?") && search != null) return MockResponse().setBody(search)
+                if (cron && path == "/api/cron/jobs") return MockResponse().setBody("""[{"id":"j1","name":"Nightly","last_run_at":null}]""")
+                if (cron && path.startsWith("/api/cron/jobs/j1/runs?")) {
+                    val started = System.currentTimeMillis() / 1000.0 - 300
+                    return MockResponse().setBody("""{"runs":[{"id":"run1","source":"cron","started_at":$started,"scheduler_owned":false,"archived":false}]}""")
+                }
+                if (cron && path.startsWith("/api/sessions/run1/messages?")) {
+                    return MockResponse().setBody("""{"messages":[{"role":"user","content":"/nightly"},{"role":"assistant","content":"Backups done."}]}""")
+                }
                 if (gateway && request.path == "/api/auth/ws-ticket") return MockResponse().setBody("""{"ticket":"t"}""")
                 if (gateway && request.path?.startsWith("/api/ws") == true) return MockResponse().withWebSocketUpgrade(FakeGateway(transcript))
                 return MockResponse().setResponseCode(
@@ -192,7 +215,7 @@ class MainActivityTest {
         ActivityScenario.launch(MainActivity::class.java).use {
             awaitTag("chat-screen")
             assertTrue(showsText("New chat"))
-            // The drawer, composed but closed, lists the run; the chat must not be it.
+            // The chat must not be the run.
             assertTrue(compose.onAllNodes(inChat("Nightly")).fetchSemanticsNodes().isEmpty())
         }
     }
@@ -222,7 +245,7 @@ class MainActivityTest {
 
     @Test
     fun backFromAChatOpenedFromTheListReturnsToTheList() {
-        serverAnswering(me = 200, sessions = sessionsJson("Nightly" to "cron"))
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"))
         storeSessionCookie()
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             awaitTag("chat-screen")
@@ -230,7 +253,7 @@ class MainActivityTest {
             compose.waitUntil(10_000) { showsText("View all") }
             compose.onNodeWithText("View all").performClick()
             awaitTag("sessions-screen")
-            val listRow = hasText("Nightly") and hasAnyAncestor(hasTestTag("session-list"))
+            val listRow = hasText("Sourdough") and hasAnyAncestor(hasTestTag("session-list"))
             compose.waitUntil(10_000) { compose.onAllNodes(listRow).fetchSemanticsNodes().isNotEmpty() }
             compose.onNode(listRow).performClick()
             awaitTag("chat-screen")
@@ -402,6 +425,11 @@ class MainActivityTest {
         assertEquals(fromList, restore(fromList))
         val cron = Screen.Chat("cron1", "Nightly", cron = true, key = "c")
         assertEquals(cron, restore(cron))
+        val job = Screen.Job("j:1", "Nightly | job", fromList = list, key = "j")
+        assertEquals(job, restore(job))
+        val runFromJob = Screen.Chat("run1", "Nightly", fromList = list, cron = true, fromJob = job, key = "r")
+        assertEquals(runFromJob, restore(runFromJob))
+        assertEquals(Screen.Sessions(back = job), restore(Screen.Sessions(back = job)))
         assertEquals(Screen.Chat(null, null, null, "k"), restore(Screen.Chat(null, null, null, "k")))
         assertEquals(list, restore(list))
         assertEquals(Screen.Sessions(), restore(Screen.Sessions()))
@@ -410,23 +438,33 @@ class MainActivityTest {
     }
 
     @Test
+    fun aMessageWaitingToBeSentIsNotSaved() {
+        val saved = with(ScreenSaver) { SaverScope { true }.save(Screen.Chat("run1", "Nightly", cron = true, key = "k", pendingMessage = "hello")) }!!
+        assertEquals(Screen.Chat("run1", "Nightly", cron = true, key = "k"), ScreenSaver.restore(saved))
+    }
+
+    @Test
     fun savedChatWithoutTheCronFieldRestoresAsNotCron() {
         val saved = """{"screen":"chat","key":"k","id":"id1","title":"T"}"""
         assertEquals(Screen.Chat("id1", "T", key = "k"), ScreenSaver.restore(saved))
     }
 
+    private fun inFeed(text: String) = hasText(text) and hasAnyAncestor(hasTestTag("job-feed-screen"))
+
     @Test
-    fun openingACronRunFromTheListShowsItsPromptCollapsed() {
-        serverAnswering(me = 200, sessions = sessionsJson("Nightly" to "cron"), gateway = true, transcript = CRON_TRANSCRIPT)
+    fun openingACronRunFromASearchHitShowsItsWorkCollapsed() {
+        val hit = """{"results":[{"id":"run1","title":"Nightly · Nov 05 11:58","source":"cron","started_at":1.0,"message_count":2}]}"""
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true, transcript = CRON_TRANSCRIPT, search = hit)
         storeSessionCookie()
         ActivityScenario.launch(MainActivity::class.java).use {
             awaitTag("chat-screen")
             openDrawer()
-            await(hasText("View all"))
-            compose.onNodeWithText("View all").performClick()
-            awaitTag("sessions-screen")
-            await(inList("Nightly"))
-            compose.onNode(inList("Nightly")).performClick()
+            await(hasContentDescription("Search") and hasClickAction())
+            compose.onAllNodes(hasContentDescription("Search") and hasClickAction())[0].performClick()
+            awaitTag("search")
+            compose.onNodeWithTag("search").performTextInput("nightly")
+            await(inList("Nightly · Nov 05 11:58"))
+            compose.onNode(inList("Nightly · Nov 05 11:58")).performClick()
 
             await(inChat("Show work (1 step)"))
             assertTrue(compose.onAllNodes(inChat("/attention-check")).fetchSemanticsNodes().isEmpty())
@@ -434,15 +472,60 @@ class MainActivityTest {
     }
 
     @Test
-    fun openingACronRunFromTheDrawerShowsItsPromptCollapsed() {
-        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Nightly" to "cron"), gateway = true, transcript = CRON_TRANSCRIPT)
+    fun aJobInTheDrawerOpensItsFeedWhoseRunOpensWithItsWorkCollapsedAndBackGoesToTheFeed() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true, transcript = CRON_TRANSCRIPT, cron = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            openDrawerEntry("Nightly")
+            awaitTag("job-feed-screen")
+            await(inFeed("Backups done."))
+
+            compose.onNode(inFeed("Show the whole run") and hasClickAction()).performClick()
+            await(inChat("Show work (1 step)"))
+            compose.waitUntil(10_000) { rpcCalls("session.resume").any { it["session_id"]?.jsonPrimitive?.content == "run1" } }
+
+            pressBack(scenario)
+            awaitTag("job-feed-screen")
+        }
+    }
+
+    @Test
+    fun aJobOpenedFromTheListGoesBackToTheList() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true, cron = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            openDrawer()
+            await(hasText("View all"))
+            compose.onNodeWithText("View all").performClick()
+            awaitTag("sessions-screen")
+            await(inList("Nightly"))
+            compose.onNode(inList("Nightly")).performClick()
+            awaitTag("job-feed-screen")
+
+            pressBack(scenario)
+            awaitTag("sessions-screen")
+        }
+    }
+
+    @Test
+    fun aReplyFromTheFeedIsSentInTheNewestRunsChat() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true, transcript = CRON_TRANSCRIPT, cron = true)
         storeSessionCookie()
         ActivityScenario.launch(MainActivity::class.java).use {
             awaitTag("chat-screen")
             openDrawerEntry("Nightly")
+            await(inFeed("Backups done."))
 
+            compose.onNode(hasTestTag("composer") and hasAnyAncestor(hasTestTag("job-feed-screen"))).performTextInput("Which backups?")
+            compose.onNode(hasContentDescription("Send") and hasAnyAncestor(hasTestTag("job-feed-screen"))).performClick()
+
+            awaitTag("chat-screen")
+            compose.waitUntil(10_000) { rpcCalls("prompt.submit").isNotEmpty() }
+            assertEquals("Which backups?", rpcCalls("prompt.submit").single()["text"]?.jsonPrimitive?.content)
+            assertTrue(rpcCalls("session.resume").any { it["session_id"]?.jsonPrimitive?.content == "run1" })
             await(inChat("Show work (1 step)"))
-            assertTrue(compose.onAllNodes(inChat("/attention-check")).fetchSemanticsNodes().isEmpty())
         }
     }
 

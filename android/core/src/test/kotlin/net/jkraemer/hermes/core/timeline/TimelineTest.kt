@@ -1,5 +1,8 @@
 package net.jkraemer.hermes.core.timeline
 
+import net.jkraemer.hermes.core.cron.CronJob
+import net.jkraemer.hermes.core.cron.CronJobSummary
+import net.jkraemer.hermes.core.cron.ShownRun
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -15,16 +18,22 @@ class TimelineTest {
     private fun at(day: Int, hour: Int, minute: Int = 0) =
         ZonedDateTime.of(2026, 11, day, hour, minute, 0, 0, berlin).toInstant()
 
-    private fun session(id: String, lastActive: Instant, pinned: Boolean = false) = SessionSummary(
-        id = id, title = id, preview = null, source = "tui", startedAt = lastActive, lastActive = lastActive,
+    private fun session(id: String, lastActive: Instant, pinned: Boolean = false, source: String = "tui") = SessionSummary(
+        id = id, title = id, preview = null, source = source, startedAt = lastActive, lastActive = lastActive,
         messageCount = 1, pinned = pinned, archived = false,
+    )
+
+    /** A job whose newest shown run was at [time], or that has shown none when it is null. */
+    private fun job(id: String, time: Instant?, unread: Boolean = false) = CronJobSummary(
+        CronJob(id, id, lastRunAt = null), time?.let { ShownRun("$id-run", it, "Report") }, unread, emptyList(),
     )
 
     private fun build(
         sessions: List<SessionSummary>,
         lastOpened: Map<String, Instant> = emptyMap(),
         needsAnswer: Set<String> = emptySet(),
-    ) = buildTimeline(sessions, now, berlin, lastOpened, baseline, needsAnswer)
+        jobs: List<CronJobSummary> = emptyList(),
+    ) = buildTimeline(sessions, jobs, now, berlin, lastOpened, baseline, needsAnswer)
 
     private fun List<TimelineItem>.rows() = filterIsInstance<TimelineItem.Row>()
 
@@ -108,8 +117,8 @@ class TimelineTest {
         assertEquals(mapOf("before" to false, "after" to true), rows)
     }
 
-    private fun drawer(sessions: List<SessionSummary>, needsAnswer: Set<String> = emptySet()) =
-        buildDrawerEntries(sessions, emptyMap(), baseline, needsAnswer)
+    private fun drawer(sessions: List<SessionSummary>, needsAnswer: Set<String> = emptySet(), jobs: List<CronJobSummary> = emptyList()) =
+        buildDrawerEntries(sessions, jobs, emptyMap(), baseline, needsAnswer)
 
     @Test
     fun drawerListsEveryPinnedSessionNewestFirst() {
@@ -160,11 +169,55 @@ class TimelineTest {
         val read = session("read", at(5, 9))
         val unread = session("unread", at(5, 11))
 
-        val entries = buildDrawerEntries(listOf(read, unread), mapOf("read" to at(5, 10)), baseline, setOf("unread"))
+        val entries = buildDrawerEntries(listOf(read, unread), emptyList(), mapOf("read" to at(5, 10)), baseline, setOf("unread"))
 
         assertEquals(
             listOf(TimelineItem.Row(unread, unread = true, needsAnswer = true), TimelineItem.Row(read, unread = false, needsAnswer = false)),
             entries.recents,
         )
+    }
+
+    @Test
+    fun timelineLeavesOutCronRunsPinnedOrNot() {
+        val sessions = listOf(session("run", at(5, 11), source = "cron"), session("pinnedRun", at(5, 10), pinned = true, source = "cron"), session("chat", at(5, 9)))
+
+        assertEquals(listOf("chat"), build(sessions).rows().map { it.session.id })
+    }
+
+    @Test
+    fun jobsSitInTheDayBucketOfTheirTimeAmongTheSessions() {
+        val items = build(
+            listOf(session("chat", at(5, 10)), session("old", at(3, 9))),
+            jobs = listOf(job("morning", at(5, 11), unread = true), job("nightly", at(4, 23)), job("quiet", null)),
+        )
+
+        assertEquals(
+            listOf(
+                TimelineItem.Header(Bucket.TODAY), TimelineItem.Job(job("morning", at(5, 11), unread = true)),
+                TimelineItem.Row(session("chat", at(5, 10)), unread = true, needsAnswer = false),
+                TimelineItem.Header(Bucket.YESTERDAY), TimelineItem.Job(job("nightly", at(4, 23))),
+                TimelineItem.Header(Bucket.OLDER), TimelineItem.Row(session("old", at(3, 9)), unread = true, needsAnswer = false),
+            ),
+            items,
+        )
+    }
+
+    @Test
+    fun drawerRecentsLeaveOutCronRunsButStillCountTen() {
+        val sessions = (1..10).map { session("s$it", at(5, 1, it)) } + session("run", at(5, 11), source = "cron")
+
+        assertEquals((10 downTo 1).map { "s$it" }, drawer(sessions).recents.map { it.session.id })
+    }
+
+    @Test
+    fun drawerKeepsAPinnedCronRunAmongThePinned() {
+        assertEquals(listOf("pinnedRun"), drawer(listOf(session("pinnedRun", at(5, 10), pinned = true, source = "cron"))).pinned.map { it.session.id })
+    }
+
+    @Test
+    fun drawerListsTheJobsNewestFirstAndThoseThatNeverReportedLast() {
+        val jobs = listOf(job("quiet", null), job("nightly", at(4, 23)), job("idle", null), job("morning", at(5, 11)))
+
+        assertEquals(listOf("morning", "nightly", "idle", "quiet"), drawer(emptyList(), jobs = jobs).scheduled.map { it.job.id })
     }
 }

@@ -21,12 +21,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import net.jkraemer.hermes.core.cron.CronJobSummary
 import net.jkraemer.hermes.core.timeline.DrawerEntries
 import net.jkraemer.hermes.core.timeline.TimelineItem
 
 /**
- * The navigation drawer: the app name with search and new chat, the pinned sessions, the newest
- * others, and a link to the full list. [onOpenChat] gets the stored session id, its title and whether it is a cron run.
+ * The navigation drawer: the app name with search and new chat, the cron jobs, the pinned sessions, the newest
+ * others, and a link to the full list. [onOpenChat] gets the stored session id, its title and whether it is a cron
+ * run; [onOpenJob] a cron job's id and name.
  */
 @Composable
 fun SessionsDrawerContent(
@@ -34,6 +36,7 @@ fun SessionsDrawerContent(
     onSearch: () -> Unit,
     onNewChat: () -> Unit,
     onOpenChat: (id: String, title: String?, cron: Boolean) -> Unit,
+    onOpenJob: (jobId: String, name: String) -> Unit,
     onViewAll: () -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize()) {
@@ -46,6 +49,10 @@ fun SessionsDrawerContent(
                 IconButton(onSearch) { Icon(Icons.Filled.Search, contentDescription = "Search") }
                 IconButton(onNewChat) { Icon(Icons.Filled.Add, contentDescription = "New chat") }
             }
+        }
+        if (entries.scheduled.isNotEmpty()) {
+            item(key = "scheduled-heading") { DrawerHeading("Scheduled") }
+            items(entries.scheduled, key = { "job-" + it.job.id }) { DrawerJob(it, onOpenJob) }
         }
         if (entries.pinned.isNotEmpty()) {
             item(key = "pinned-heading") { DrawerHeading("Pinned") }
@@ -77,19 +84,28 @@ private fun DrawerHeading(text: String) {
 }
 
 @Composable
+private fun DrawerJob(summary: CronJobSummary, onOpenJob: (jobId: String, name: String) -> Unit) {
+    DrawerRow(summary.job.name, summary.unread, onClick = { onOpenJob(summary.job.id, summary.job.name) }) { JobIcon(size = 20.dp) }
+}
+
+@Composable
 private fun DrawerEntry(row: TimelineItem.Row, onOpenChat: (id: String, title: String?, cron: Boolean) -> Unit) {
+    DrawerRow(row.session.displayTitle, row.unread, onClick = { onOpenChat(row.session.id, row.session.title, row.session.isCron) }) {
+        KindIcon(row.session, size = 20.dp)
+    }
+}
+
+/** One line of the drawer: [icon], [title] and the unread dot. */
+@Composable
+private fun DrawerRow(title: String, unread: Boolean, onClick: () -> Unit, icon: @Composable () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().clickable { onOpenChat(row.session.id, row.session.title, row.session.isCron) }
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        KindIcon(row.session, size = 20.dp)
+        icon()
         Spacer(Modifier.width(16.dp))
-        Text(
-            row.session.displayTitle, Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis,
-        )
-        if (row.unread) {
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (unread) {
             Spacer(Modifier.width(12.dp))
             UnreadDot()
         }

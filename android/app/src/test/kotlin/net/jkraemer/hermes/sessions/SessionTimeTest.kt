@@ -57,4 +57,13 @@ class SessionTimeTest {
         // The same instant is yesterday in UTC.
         assertEquals("23:30", formatSessionTime(Instant.parse("2026-11-04T23:30:00Z"), now, ZoneId.of("UTC"), Locale.UK))
     }
+
+    private fun formatRun(time: Instant) = formatRunTime(time, now, berlin, Locale.UK)
+
+    @Test fun aRunTimeNamesTodayAndYesterdayAndOlderDays() {
+        assertEquals("Today 10:03", formatRun(at(11, 5, 10, 3)))
+        assertEquals("Yesterday 08:05", formatRun(at(11, 4, 8, 5)))
+        assertEquals("Nov 3, 07:21", formatRun(at(11, 3, 7, 21)))
+        assertEquals("Dec 30, 2025, 22:00", formatRun(at(12, 30, 22, 0, year = 2025)))
+    }
 }

@@ -2,6 +2,7 @@ package net.jkraemer.hermes.sessions
 
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -15,15 +16,32 @@ import java.util.Locale
 fun formatSessionTime(lastActive: Instant, now: Instant, zone: ZoneId, locale: Locale): String {
     val day = lastActive.atZone(zone).toLocalDate()
     val today = now.atZone(zone).toLocalDate()
-    val clockTime = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).format(lastActive.atZone(zone))
     return when {
         !day.isBefore(today) -> relative(Duration.between(lastActive, now))
-        day == today.minusDays(1) -> clockTime
-        else -> {
-            val pattern = if (day.year == today.year) "MMM d" else "MMM d, yyyy"
-            "${DateTimeFormatter.ofPattern(pattern, locale).format(day)}, $clockTime"
-        }
+        day == today.minusDays(1) -> clockTime(lastActive, zone, locale)
+        else -> dateAndClockTime(lastActive, today, zone, locale)
     }
+}
+
+/** When a cron run ran, as its job's feed shows it: "Today 10:03", "Yesterday 08:05", else as [formatSessionTime] does. */
+fun formatRunTime(time: Instant, now: Instant, zone: ZoneId, locale: Locale): String {
+    val day = time.atZone(zone).toLocalDate()
+    val today = now.atZone(zone).toLocalDate()
+    return when {
+        !day.isBefore(today) -> "Today ${clockTime(time, zone, locale)}"
+        day == today.minusDays(1) -> "Yesterday ${clockTime(time, zone, locale)}"
+        else -> dateAndClockTime(time, today, zone, locale)
+    }
+}
+
+private fun clockTime(time: Instant, zone: ZoneId, locale: Locale): String =
+    DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(locale).format(time.atZone(zone))
+
+/** The date, with the year when it is not [today]'s, and the clock time. */
+private fun dateAndClockTime(time: Instant, today: LocalDate, zone: ZoneId, locale: Locale): String {
+    val day = time.atZone(zone).toLocalDate()
+    val pattern = if (day.year == today.year) "MMM d" else "MMM d, yyyy"
+    return "${DateTimeFormatter.ofPattern(pattern, locale).format(day)}, ${clockTime(time, zone, locale)}"
 }
 
 private fun relative(age: Duration): String {

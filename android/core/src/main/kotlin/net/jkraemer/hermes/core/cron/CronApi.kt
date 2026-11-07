@@ -10,8 +10,10 @@ import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.time.Instant
+import java.time.OffsetDateTime
 
-data class CronJob(val id: String, val name: String)
+/** [lastRunAt] is when its last run finished; null before the first. */
+data class CronJob(val id: String, val name: String, val lastRunAt: Instant?)
 
 /**
  * One run of a cron job: the session it ran in. [running] while the scheduler still owns it, so its final reply
@@ -23,6 +25,7 @@ data class CronRun(val sessionId: String, val startedAt: Instant, val running: B
 private data class JobRow(
     val id: String,
     val name: String? = null,
+    @SerialName("last_run_at") val lastRunAt: String? = null,
     @SerialName("is_default_profile") val isDefaultProfile: Boolean = true,
 )
 
@@ -45,7 +48,9 @@ class CronApi(private val baseUrl: HttpUrl, private val client: OkHttpClient) {
     /** The jobs of the default profile, the only one the app works with; Hermes lists every profile's. */
     suspend fun jobs(): List<CronJob> = withContext(Dispatchers.IO) {
         val url = baseUrl.newBuilder().addPathSegments("api/cron/jobs").build()
-        json.decodeFromString<List<JobRow>>(get(url)).filter { it.isDefaultProfile }.map { CronJob(it.id, it.name?.takeIf(String::isNotBlank) ?: it.id) }
+        json.decodeFromString<List<JobRow>>(get(url)).filter { it.isDefaultProfile }.map {
+            CronJob(it.id, it.name?.takeIf(String::isNotBlank) ?: it.id, it.lastRunAt?.let { time -> runCatching { OffsetDateTime.parse(time).toInstant() }.getOrNull() })
+        }
     }
 
     /**

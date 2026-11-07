@@ -25,8 +25,12 @@ val ARCHIVE_AFTER: Duration = Duration.ofDays(7)
 suspend fun summarizeJob(job: CronJob, runs: List<CronRun>, seenUntil: Instant, replyOf: suspend (CronRun) -> String?): CronJobSummary {
     val listed = runs.filter { !it.archived }
     val latest = listed.filter { !it.running }.firstNotNullOfOrNull { run -> shown(run, replyOf(run)) }
-    return CronJobSummary(job, latest, unread = latest != null && latest.time > seenUntil, listed)
+    return CronJobSummary(job, latest, unread = false, listed).seenUpTo(seenUntil)
 }
+
+/** The summary with the job seen up to [seenUntil]: unread when its newest shown run is later. */
+fun CronJobSummary.seenUpTo(seenUntil: Instant): CronJobSummary =
+    copy(unread = latestShownRun != null && latestShownRun.time > seenUntil)
 
 /** What a job's feed shows: of [runs], those whose reply is in [replies] and not silent, oldest first. */
 fun feedEntries(runs: List<CronRun>, replies: Map<String, String?>): List<ShownRun> =

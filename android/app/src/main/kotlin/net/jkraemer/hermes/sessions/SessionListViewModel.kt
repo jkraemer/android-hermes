@@ -12,7 +12,18 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import net.jkraemer.hermes.core.HermesLog
 import net.jkraemer.hermes.core.auth.NotLoggedInException
+import net.jkraemer.hermes.core.cron.CronApi
+import net.jkraemer.hermes.core.cron.CronJob
+import net.jkraemer.hermes.core.cron.CronJobSummary
+import net.jkraemer.hermes.core.cron.runsToArchive
+import net.jkraemer.hermes.core.cron.seenUpTo
+import net.jkraemer.hermes.core.cron.summarizeJob
+import net.jkraemer.hermes.cron.CronSource
 import net.jkraemer.hermes.core.sessions.SearchHit
 import net.jkraemer.hermes.core.sessions.SessionPage
 import net.jkraemer.hermes.core.sessions.SessionSummary
@@ -24,16 +35,18 @@ import net.jkraemer.hermes.core.timeline.buildTimeline
 import net.jkraemer.hermes.settings.SeenStore
 import java.io.IOException
 import java.time.Clock
+import java.time.Duration
+import java.time.Instant
 
-/** What the session list needs from the server. */
-interface SessionListSource {
+/** What the session list needs from the server: the sessions, and the cron jobs it lists in place of their runs. */
+interface SessionListSource : CronSource {
     suspend fun list(offset: Int, limit: Int): SessionPage
     suspend fun search(query: String, limit: Int): List<SearchHit>
     suspend fun update(id: String, title: String?, pinned: Boolean?, archived: Boolean?)
 }
 
 /** [api] is read on every call because the server, and with it the API, can change. */
-class SessionsApiSource(private val api: () -> SessionsApi) : SessionListSource {
+class SessionsApiSource(private val api: () -> SessionsApi, cron: CronSource) : SessionListSource, CronSource by cron {
     override suspend fun list(offset: Int, limit: Int) = api().list(offset, limit)
     override suspend fun search(query: String, limit: Int) = api().search(query, limit)
     override suspend fun update(id: String, title: String?, pinned: Boolean?, archived: Boolean?) =
@@ -57,6 +70,7 @@ data class SessionListState(
 
 private data class Loaded(
     val sessions: List<SessionSummary> = emptyList(),
+    val jobs: List<CronJobSummary> = emptyList(),
     val total: Int = 0,
     /** Null while the query is blank. */
     val searchResults: List<SearchHit>? = null,
@@ -69,23 +83,29 @@ private data class Loaded(
 
 /**
  * [needsAnswer] holds the stored ids of sessions waiting for the user. [clock] decides which
- * day counts as today.
+ * day counts as today. Loading the list also archives old cron runs, at most once a day, and
+ * reports what fails at that to [log].
  */
 class SessionListViewModel(
     private val source: SessionListSource,
     needsAnswer: StateFlow<Set<String>>,
     private val seen: SeenStore,
     private val clock: Clock = Clock.systemDefaultZone(),
+    private val log: HermesLog = HermesLog.None,
 ) : ViewModel() {
     private val loaded = MutableStateFlow(Loaded())
     private var loadJob: Job? = null
     private var searchJob: Job? = null
+    private var jobsLoad: Job? = null
+
+    /** Each job's summary by its id, with the job's last run time it was made for. */
+    private val summaries = mutableMapOf<String, Pair<Instant?, CronJobSummary>>()
 
     val state: StateFlow<SessionListState> = combine(loaded, needsAnswer) { loaded, needsAnswer ->
         val lastOpened = seen.lastOpened()
         SessionListState(
-            items = buildTimeline(loaded.sessions, clock.instant(), clock.zone, lastOpened, seen.baseline, needsAnswer),
-            drawer = buildDrawerEntries(loaded.sessions, lastOpened, seen.baseline, needsAnswer),
+            items = buildTimeline(loaded.sessions, loaded.jobs, clock.instant(), clock.zone, lastOpened, seen.baseline, needsAnswer),
+            drawer = buildDrawerEntries(loaded.sessions, loaded.jobs, lastOpened, seen.baseline, needsAnswer),
             results = loaded.searchResults,
             searchOpen = loaded.searchOpen,
             refreshing = loaded.refreshing,
@@ -120,6 +140,67 @@ class SessionListViewModel(
             }
             loaded.update { it.copy(sessions = (page.sessions + it.sessions).distinctBy(SessionSummary::id), total = page.total) }
         }
+        loadJobs()
+    }
+
+    /**
+     * Brings the cron jobs up to date, replacing a load in progress. A job whose last run is the one it was
+     * summarized for keeps its summary, with only its unread state renewed. Failures are left to the
+     * sessions' own load to report.
+     */
+    private fun loadJobs() {
+        jobsLoad?.cancel()
+        jobsLoad = viewModelScope.launch {
+            val jobs = try {
+                coroutineScope { source.jobs().map { job -> async { summaryOf(job) } }.awaitAll() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: NotLoggedInException) {
+                loaded.update { it.copy(needsLogin = true) }
+                return@launch
+            } catch (e: Exception) {
+                log.log("cron jobs failed to load: $e")
+                return@launch
+            }
+            loaded.update { it.copy(jobs = jobs) }
+            archiveOldRunsWhenDue(jobs.map { it.job })
+        }
+    }
+
+    private suspend fun summaryOf(job: CronJob): CronJobSummary {
+        val seenUntil = seen.jobSeenUntil(job.id) ?: seen.baseline
+        summaries[job.id]?.let { (lastRunAt, summary) -> if (lastRunAt == job.lastRunAt) return summary.copy(job = job).seenUpTo(seenUntil) }
+        return summarizeJob(job, source.runs(job.id, CronApi.MAX_RUNS), seenUntil, source::finalReply)
+            .also { summaries[job.id] = job.lastRunAt to it }
+    }
+
+    /**
+     * Archives, in the background, the runs older than a week that were read or were silent, so they leave
+     * Hermes' session lists too; at most once every [ARCHIVE_INTERVAL]. Failures are only logged.
+     */
+    private fun archiveOldRunsWhenDue(jobs: List<CronJob>) {
+        val now = clock.instant()
+        if (seen.lastArchivePass()?.let { Duration.between(it, now) < ARCHIVE_INTERVAL } == true) return
+        seen.markArchivePass(now)
+        viewModelScope.launch {
+            for (job in jobs) {
+                val runs = quietly("runs of cron job ${job.id} failed to load") { source.runs(job.id, CronApi.MAX_RUNS) } ?: continue
+                val old = quietly("old runs of cron job ${job.id} failed to load") {
+                    runsToArchive(runs, seen.jobSeenUntil(job.id) ?: seen.baseline, now, source::finalReply)
+                } ?: continue
+                for (run in old) quietly("archiving cron run ${run.sessionId} failed") { source.update(run.sessionId, null, null, true) }
+            }
+        }
+    }
+
+    /** Runs [block]; a failure is logged as [failure] and the result is null. */
+    private suspend fun <T> quietly(failure: String, block: suspend () -> T): T? = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log.log("$failure: $e")
+        null
     }
 
     /** Appends the next page when there is one. */
@@ -175,6 +256,7 @@ class SessionListViewModel(
         attempt { source.list(0, PAGE_SIZE) }?.let { page ->
             loaded.update { it.copy(sessions = page.sessions, total = page.total, error = null) }
         }
+        loadJobs()
         val query = loaded.value.query
         if (query.isNotBlank()) runSearch(query)
         loaded.update { it.copy(refreshing = false) }
@@ -206,6 +288,7 @@ class SessionListViewModel(
     }
 
     private companion object {
+        val ARCHIVE_INTERVAL: Duration = Duration.ofHours(24)
         const val PAGE_SIZE = 50
         const val SEARCH_LIMIT = 20
         const val SEARCH_DEBOUNCE_MS = 300L

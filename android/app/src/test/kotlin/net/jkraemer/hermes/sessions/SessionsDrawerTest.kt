@@ -16,6 +16,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.MutableStateFlow
 import net.jkraemer.hermes.settings.SeenStore
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,6 +37,7 @@ class SessionsDrawerTest {
     private val viewAlls = mutableListOf<Unit>()
     private val opened = mutableListOf<Pair<String, String?>>()
     private val openedCron = mutableListOf<Boolean>()
+    private val openedJobs = mutableListOf<Pair<String, String>>()
 
     private fun show(sessions: List<net.jkraemer.hermes.core.sessions.SessionSummary>) {
         source.sessions = sessions
@@ -55,6 +57,7 @@ class SessionsDrawerTest {
                         opened += id to title
                         openedCron += cron
                     },
+                    onOpenJob = { id, name -> openedJobs += id to name },
                     onViewAll = { viewAlls += Unit },
                 )
             }
@@ -110,19 +113,53 @@ class SessionsDrawerTest {
         compose.onAllNodes(hasText("Recents")).assertCountEquals(0)
     }
 
+    /** Jobs called after their ids, each with one run [minutesAgo] that reported something, or nothing when null. */
+    private fun jobs(vararg jobs: Pair<String, Long?>) {
+        source.jobs = jobs.map { cronJob(it.first) }
+        source.runs = jobs.associate { (id, minutesAgo) -> id to listOfNotNull(minutesAgo?.let { cronRun("$id-run", NOW.minusSeconds(it * 60)) }) }
+        source.replies = jobs.associate { "${it.first}-run" to "Report" }
+    }
+
     @Test
     fun entriesShowOnlyTheTitleAKindIconAndTheUnreadDot() {
-        show(listOf(
-            session("a", title = "Chat title", preview = "a preview", lastActive = NOW.minusSeconds(60)),
-            session("b", title = "Nightly run", source = "cron", lastActive = NOW.minusSeconds(120)),
-        ))
+        jobs("Nightly" to 2L)
+        show(listOf(session("a", title = "Chat title", preview = "a preview", lastActive = NOW.minusSeconds(60))))
         waitForText("Chat title")
+        waitForText("Nightly")
 
         compose.onAllNodes(hasText("a preview")).assertCountEquals(0)
         compose.onAllNodes(hasText("minute", substring = true)).assertCountEquals(0)
         compose.onAllNodes(hasContentDescription("Chat")).assertCountEquals(1)
-        compose.onAllNodes(hasContentDescription("Cron run")).assertCountEquals(1)
+        compose.onAllNodes(hasContentDescription("Cron job")).assertCountEquals(1)
         compose.onAllNodes(hasTestTag("unread-dot"), useUnmergedTree = true).assertCountEquals(2)
+    }
+
+    @Test
+    fun scheduledJobsComeFirstNewestReportFirstAndSilentOnesLast() {
+        jobs("Quiet" to null, "Nightly" to 120L, "Morning" to 5L)
+        show(listOf(session("a", title = "Chat title")))
+        waitForText("Quiet")
+
+        val top = { text: String -> compose.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top }
+        assertTrue(top("Hermes") < top("Scheduled"))
+        assertTrue(top("Scheduled") < top("Morning"))
+        assertTrue(top("Morning") < top("Nightly"))
+        assertTrue(top("Nightly") < top("Quiet"))
+        assertTrue(top("Quiet") < top("Recents"))
+    }
+
+    @Test
+    fun withoutJobsThereIsNoScheduledSection() {
+        show(listOf(session("a")))
+        waitForText("a")
+        compose.onAllNodes(hasText("Scheduled")).assertCountEquals(0)
+    }
+
+    @Test
+    fun cronRunsAreNotAmongTheRecents() {
+        show(listOf(session("a", title = "Chat title"), session("b", title = "Nightly run", source = "cron", lastActive = NOW.minusSeconds(30))))
+        waitForText("Chat title")
+        compose.onAllNodes(hasText("Nightly run")).assertCountEquals(0)
     }
 
     @Test
@@ -134,8 +171,18 @@ class SessionsDrawerTest {
     }
 
     @Test
-    fun tappingACronEntryOpensItAsACronChat() {
-        show(listOf(session("a", title = "Chat title"), session("b", title = "Nightly run", source = "cron", lastActive = NOW.minusSeconds(120))))
+    fun tappingAJobOpensTheJob() {
+        jobs("Nightly" to 2L)
+        show(listOf(session("a", title = "Chat title")))
+        waitForText("Nightly")
+        compose.onNodeWithText("Nightly").performClick()
+        assertEquals(listOf("Nightly" to "Nightly"), openedJobs)
+        assertEquals(emptyList<Pair<String, String?>>(), opened)
+    }
+
+    @Test
+    fun tappingAPinnedCronRunOpensItAsACronChat() {
+        show(listOf(session("a", title = "Chat title"), session("b", title = "Nightly run", source = "cron", pinned = true)))
         waitForText("Nightly run")
         compose.onNodeWithText("Nightly run").performClick()
         compose.onNodeWithText("Chat title").performClick()

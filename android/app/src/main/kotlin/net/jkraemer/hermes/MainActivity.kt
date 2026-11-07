@@ -9,6 +9,10 @@ import androidx.compose.ui.platform.LocalContext
 import org.json.JSONObject
 import net.jkraemer.hermes.chat.ChatScreen
 import net.jkraemer.hermes.chat.ChatViewModel
+import net.jkraemer.hermes.cron.CronApiSource
+import net.jkraemer.hermes.cron.JobFeedScreen
+import net.jkraemer.hermes.cron.JobFeedViewModel
+import androidx.compose.runtime.remember
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ModalDrawerSheet
@@ -65,18 +69,24 @@ private fun Screen.toJson(): JSONObject = when (this) {
         title?.let { put("title", it) }
         fromList?.let { put("from", it.toJson()) }
         if (cron) put("cron", true)
+        fromJob?.let { put("job", it.toJson()) }
+    }
+    is Screen.Job -> JSONObject().put("screen", "job").put("key", key).put("id", jobId).put("name", name).apply {
+        fromList?.let { put("from", it.toJson()) }
     }
 }
 
 private fun JSONObject.toScreen(): Screen = when (getString("screen")) {
     "login" -> Screen.Login
-    "sessions" -> Screen.Sessions(optJSONObject("back")?.toScreen() as Screen.Chat?)
+    "sessions" -> Screen.Sessions(optJSONObject("back")?.toScreen()?.also { require(it is Screen.Chat || it is Screen.Job) })
+    "job" -> Screen.Job(getString("id"), getString("name"), optJSONObject("from")?.toScreen() as Screen.Sessions?, getString("key"))
     else -> Screen.Chat(
         optString("id").ifEmpty { null },
         optString("title").ifEmpty { null },
         optJSONObject("from")?.toScreen() as Screen.Sessions?,
         getString("key"),
         optBoolean("cron"),
+        optJSONObject("job")?.toScreen() as Screen.Job?,
     )
 }
 
@@ -120,22 +130,26 @@ private fun HermesRoot(graph: AppGraph) {
                 }
             })
         }
-        is Screen.Sessions, is Screen.Chat -> SessionsAndChat(graph, current) { screen = it }
+        is Screen.Sessions, is Screen.Chat, is Screen.Job -> SessionsAndChat(graph, current) { screen = it }
     }
 }
 
-/** The session list and the chat, which share the navigation drawer and the list's sessions. */
+/** The session list, the chat and a cron job's feed, which share the navigation drawer and the list's sessions. */
 @Composable
 private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> Unit) {
     val activity = LocalContext.current as ComponentActivity
+    val cronSource = remember(graph) { CronApiSource({ graph.cron }, { graph.finalReplies }) }
     val sessionList = viewModel {
-        SessionListViewModel(SessionsApiSource { graph.sessions }, graph.needsAnswer, graph.seenStore)
+        SessionListViewModel(SessionsApiSource({ graph.sessions }, cronSource), graph.needsAnswer, graph.seenStore, log = graph.log)
     }
     val chat = (current as? Screen.Chat)?.let { open ->
         viewModel(key = open.key) {
-            ChatViewModel(graph.rpc, open.storedSessionId, open.title, graph.needsAnswer, graph.seenStore, log = graph.log)
+            ChatViewModel(
+                graph.rpc, open.storedSessionId, open.title, graph.needsAnswer, graph.seenStore, log = graph.log, pendingMessage = open.pendingMessage,
+            )
         }
     }
+    val feed = (current as? Screen.Job)?.let { open -> viewModel(key = open.key) { JobFeedViewModel(cronSource, open.jobId, graph.seenStore) } }
     val sessionState by sessionList.state.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -145,10 +159,15 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     LaunchedEffect(Unit) { sessionList.refreshQuietly() }
     LaunchedEffect(drawerState.targetValue == DrawerValue.Open) { if (drawerState.targetValue == DrawerValue.Open) sessionList.refreshQuietly() }
 
-    // Back goes to the list a chat was opened from, and from the list to the chat it was opened
-    // from; with neither it leaves the app.
-    BackHandler(current is Screen.Chat && current.fromList != null) { show((current as Screen.Chat).fromList!!) }
-    BackHandler(current is Screen.Sessions && current.back != null) { show((current as Screen.Sessions).back!!) }
+    // Back goes from a cron run to the job's feed it was opened from, from a chat or a feed to the list it was
+    // opened from, and from the list to the chat or feed it was opened from; with none it leaves the app.
+    val backTo = when (current) {
+        is Screen.Chat -> current.fromJob ?: current.fromList
+        is Screen.Job -> current.fromList
+        is Screen.Sessions -> current.back
+        else -> null
+    }
+    BackHandler(backTo != null) { show(backTo!!) }
     BackHandler(current is Screen.Sessions && sessionState.searchOpen, sessionList::closeSearch)
     // The open drawer is on top of everything, so back closes it first; the last handler registered wins.
     BackHandler(drawerState.isOpen) { scope.launch { drawerState.close() } }
@@ -158,30 +177,44 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     /** The chat to come back to, opened again with a fresh controller; an unused new chat is just another new chat. */
     fun Screen.Chat.reopened() = Screen.Chat(
         storedSessionId.takeIf { chat?.hasStoredSession == true }, title.takeIf { chat?.hasStoredSession == true },
-        cron = cron,
+        cron = cron, fromJob = fromJob,
     )
 
     fun showList() {
         show(
             when (current) {
-                // A chat that came from the list goes back to that list, which already remembers where it began.
+                // A chat or feed that came from the list goes back to that list, which already remembers where it began.
                 is Screen.Chat -> current.fromList ?: Screen.Sessions(back = current.reopened())
+                is Screen.Job -> current.fromList ?: Screen.Sessions(back = current)
                 else -> current
             },
         )
         closeDrawer()
     }
 
+    /** The list back returns to from what is opened now: the one the current screen came from, if any. */
+    fun fromList(): Screen.Sessions? = when (current) {
+        is Screen.Sessions -> current
+        is Screen.Chat -> current.fromList
+        is Screen.Job -> current.fromList
+        else -> null
+    }
+
     fun openChat(id: String?, title: String?, cron: Boolean) {
         sessionList.closeSearch()
-        val fromList = when (current) {
-            is Screen.Sessions -> current
-            is Screen.Chat -> current.fromList
-            else -> null
-        }
-        show(Screen.Chat(id, title, fromList, cron = cron))
+        show(Screen.Chat(id, title, fromList(), cron = cron))
         closeDrawer()
     }
+
+    fun openJob(jobId: String, name: String) {
+        sessionList.closeSearch()
+        show(Screen.Job(jobId, name, fromList()))
+        closeDrawer()
+    }
+
+    /** Opens a run of the job on screen, whose back returns to the job; [message] is sent in it once it is open. */
+    fun openRun(job: Screen.Job, sessionId: String, message: String? = null) =
+        show(Screen.Chat(sessionId, job.name, job.fromList, cron = true, fromJob = job, pendingMessage = message))
 
     ModalNavigationDrawer(
         drawerContent = {
@@ -194,6 +227,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                     },
                     onNewChat = { openChat(null, null, false) },
                     onOpenChat = ::openChat,
+                    onOpenJob = ::openJob,
                     onViewAll = ::showList,
                 )
             }
@@ -206,6 +240,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                 host = graph.serverUrl?.host.orEmpty(),
                 onOpenMenu = { scope.launch { drawerState.open() } },
                 onOpenChat = ::openChat,
+                onOpenJob = ::openJob,
                 onNotLoggedIn = { show(Screen.Login) },
                 onRetryConnect = graph::reconnect,
             )
@@ -223,6 +258,13 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                     onStoredSessionId = { id -> if (current.storedSessionId == null) show(current.copy(storedSessionId = id)) },
                 )
             }
+            is Screen.Job -> JobFeedScreen(
+                checkNotNull(feed),
+                name = current.name,
+                onOpenMenu = { scope.launch { drawerState.open() } },
+                onOpenRun = { openRun(current, it) },
+                onReply = { run, text -> openRun(current, run, text) },
+            )
             else -> Unit
         }
     }
