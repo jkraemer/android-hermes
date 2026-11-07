@@ -9,7 +9,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import net.jkraemer.hermes.chat.ParsedMarkdown
 import net.jkraemer.hermes.core.cron.CronApi
 import net.jkraemer.hermes.core.cron.CronRun
@@ -24,8 +27,8 @@ import net.jkraemer.hermes.settings.SeenStore
 data class JobFeedState(val entries: List<ShownRun> = emptyList(), val loading: Boolean = true, val failed: Boolean = false)
 
 /**
- * The feed of one cron job: what each of its runs reported. Entries appear as their replies arrive, newest first;
- * the job is marked seen up to the newest one shown.
+ * The feed of one cron job: what each of its runs reported. It loads when created; entries appear as their replies
+ * arrive, a few read at a time, newest first; the job is marked seen up to the newest one shown.
  */
 class JobFeedViewModel(
     private val source: CronSource,
@@ -44,6 +47,10 @@ class JobFeedViewModel(
     private val replies = mutableMapOf<String, String>()
     private var load: Job? = null
 
+    init {
+        refresh()
+    }
+
     /** Reads the job's runs again, and the replies of those not read before. */
     fun refresh() {
         load?.cancel()
@@ -58,10 +65,16 @@ class JobFeedViewModel(
                 return@launch
             }
             show(runs)
-            for (run in runs) {
-                if (run.archived || run.running || run.sessionId in replies) continue
-                replies[run.sessionId] = replyOf(run) ?: continue
-                show(runs)
+            val reading = Semaphore(PARALLEL_REPLIES)
+            coroutineScope {
+                for (run in runs) {
+                    if (run.archived || run.running || run.sessionId in replies) continue
+                    launch {
+                        val reply = reading.withPermit { replyOf(run) } ?: return@launch
+                        replies[run.sessionId] = reply
+                        show(runs)
+                    }
+                }
             }
             _state.update { it.copy(loading = false) }
         }
@@ -81,5 +94,10 @@ class JobFeedViewModel(
         entries.forEach { markdown.parse(it.reply) }
         _state.update { it.copy(entries = entries) }
         entries.lastOrNull()?.let { seen.markJobSeen(jobId, it.time) }
+    }
+
+    private companion object {
+        /** How many replies are read at once. */
+        const val PARALLEL_REPLIES = 4
     }
 }

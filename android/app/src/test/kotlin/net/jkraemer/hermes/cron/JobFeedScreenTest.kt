@@ -2,6 +2,7 @@ package net.jkraemer.hermes.cron
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -68,12 +69,15 @@ class JobFeedScreenTest {
         )
     }
 
+    /** Whether the feed is on screen; taking it off and back is what a rotation does to its composition. */
+    private val onScreen = mutableStateOf(true)
+
     private fun show() {
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-test", Context.MODE_PRIVATE)
         seen = SeenStore(prefs) { NOW.minusSeconds(30 * 86_400L) }
         viewModel = JobFeedViewModel(source, "j1", seen)
         compose.setContent {
-            MaterialTheme {
+            if (onScreen.value) MaterialTheme {
                 JobFeedScreen(
                     viewModel,
                     name = "Attention Check",
@@ -230,5 +234,38 @@ class JobFeedScreenTest {
         val newest = compose.onNode(hasText("Two new mails.") and hasAnyAncestor(hasTestTag("job-feed")), useUnmergedTree = true).fetchSemanticsNode().boundsInRoot
         val composer = compose.onNodeWithTag("composer-box").fetchSemanticsNode().boundsInRoot
         assertTrue("$newest overlaps the composer $composer", newest.bottom <= composer.top)
+    }
+
+    @Test
+    fun showingTheFeedAgainDoesNotReadItsRunsAgain() {
+        jobWithRuns()
+        show()
+        waitForEntries(3)
+
+        onScreen.value = false
+        compose.waitForIdle()
+        onScreen.value = true
+        compose.waitForIdle()
+        waitForText("Two new mails.")
+
+        assertEquals(listOf("j1"), source.runsCalls)
+    }
+
+    @Test
+    fun repliesAreReadSeveralAtATimeButNoMoreThanFour() {
+        source.runs = mapOf("j1" to (1..10).map { cronRun("r$it", at(7, 10, 0).minusSeconds(it * 3_600L)) })
+        source.replies = (1..10).associate { "r$it" to "Report $it" }
+        val gate = CompletableDeferred<Unit>()
+        source.replyGate = gate
+        show()
+
+        compose.waitUntil(10_000) { source.repliesInFlight == 4 }
+        Thread.sleep(200)
+        compose.waitForIdle()
+        assertEquals(4, source.mostRepliesInFlight)
+
+        gate.complete(Unit)
+        waitForEntries(10)
+        assertEquals(4, source.mostRepliesInFlight)
     }
 }
