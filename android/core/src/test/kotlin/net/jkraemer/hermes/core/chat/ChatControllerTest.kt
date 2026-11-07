@@ -8,7 +8,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -599,8 +599,15 @@ class ChatControllerTest {
             }
             dropConnection(peer)
             val expected = (1..total).joinToString("") { ('a' + it % 26).toString() }
-            withTimeout(20_000) {
+            val arrived = withTimeoutOrNull(20_000) {
                 while ((chat.state.value.items.lastOrNull() as? ChatItem.Assistant)?.markdown != expected) delay(20)
+            }
+            if (arrived == null) {
+                // Rare under heavy load and never reproduced: say whether text was lost, doubled or just late.
+                val items = chat.state.value.items
+                val text = (items.lastOrNull() as? ChatItem.Assistant)?.markdown.orEmpty()
+                val diverges = text.zip(expected).indexOfFirst { (a, b) -> a != b }.takeIf { it >= 0 } ?: minOf(text.length, expected.length)
+                fail("after 20 s: ${items.size} items, text ${text.length} of ${expected.length} chars, first divergence at $diverges, lastSeq ${chat.state.value.lastSeq}")
             }
             assertEquals(1, chat.state.value.items.size)
         } finally {
