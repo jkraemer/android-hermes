@@ -57,7 +57,7 @@ class JobFeedViewModel(
         load = viewModelScope.launch {
             _state.update { it.copy(loading = true, failed = false) }
             val runs = try {
-                source.runs(jobId, CronApi.MAX_RUNS)
+                source.runs(jobId, CronApi.MAX_RUNS).runs
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

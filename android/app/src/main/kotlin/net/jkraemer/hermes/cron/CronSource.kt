@@ -3,14 +3,15 @@ package net.jkraemer.hermes.cron
 import net.jkraemer.hermes.core.cron.CronApi
 import net.jkraemer.hermes.core.cron.CronJob
 import net.jkraemer.hermes.core.cron.CronRun
+import net.jkraemer.hermes.core.cron.CronRunPage
 import net.jkraemer.hermes.core.cron.FinalReplies
 
 /** What the app needs from Hermes' cron jobs. */
 interface CronSource {
     suspend fun jobs(): List<CronJob>
 
-    /** The job's newest [limit] runs, newest first. */
-    suspend fun runs(jobId: String, limit: Int): List<CronRun>
+    /** The job's runs among its newest [limit] rows, newest first. */
+    suspend fun runs(jobId: String, limit: Int): CronRunPage
 
     /** The reply [run] ended with, if any. */
     suspend fun finalReply(run: CronRun): String?

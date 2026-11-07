@@ -36,6 +36,7 @@ import net.jkraemer.hermes.core.timeline.TimelineItem
 import net.jkraemer.hermes.settings.SeenStore
 import net.jkraemer.hermes.core.cron.CronJob
 import net.jkraemer.hermes.core.cron.CronRun
+import net.jkraemer.hermes.core.cron.CronRunPage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -95,6 +96,9 @@ internal class FakeSource(
     /** Runs whose final reply fails to load. */
     var failingReplies = emptySet<String>()
 
+    /** How many rows of each job's newest runs Hermes fills with the output of script-only runs. */
+    var scriptOnlyRows = emptyMap<String, Int>()
+
     /** Jobs whose runs fail to load. */
     var failingRuns = emptySet<String>()
 
@@ -131,12 +135,14 @@ internal class FakeSource(
         return jobs
     }
 
-    override suspend fun runs(jobId: String, limit: Int): List<CronRun> {
+    override suspend fun runs(jobId: String, limit: Int): CronRunPage {
         failure?.let { throw it }
         runsCalls += jobId
         runsRequests += jobId to limit
         if (jobId in failingRuns) throw IOException("runs of $jobId failed")
-        return runs[jobId].orEmpty().take(limit)
+        val all = runs[jobId].orEmpty()
+        val page = all.take(limit - (scriptOnlyRows[jobId] ?: 0))
+        return CronRunPage(page, hasOlder = all.size + (scriptOnlyRows[jobId] ?: 0) > limit)
     }
 
     override suspend fun finalReply(run: CronRun): String? {

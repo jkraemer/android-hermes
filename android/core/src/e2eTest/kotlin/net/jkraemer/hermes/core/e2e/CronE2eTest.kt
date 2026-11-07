@@ -49,7 +49,7 @@ class CronE2eTest {
     /** Runs the job now; Hermes answers once the run has finished. Returns the job's one run. */
     private suspend fun E2eClient.runOnce(jobId: String): CronRun {
         rest("POST", "api/cron/jobs/$jobId/trigger")
-        val runs = cron.runs(jobId)
+        val runs = cron.runs(jobId).runs
         assertEquals("runs of $jobId: $runs", 1, runs.size)
         return runs.single()
     }
@@ -95,7 +95,7 @@ class CronE2eTest {
 
         app.sessions.update(run.sessionId, archived = true)
 
-        assertTrue("run ${run.sessionId} is not archived: ${app.cron.runs(job)}", app.cron.runs(job).single().archived)
+        assertTrue("run ${run.sessionId} is not archived: ${app.cron.runs(job)}", app.cron.runs(job).runs.single().archived)
         assertTrue(
             "archived run ${run.sessionId} is still in the session list",
             app.sessions.list(limit = 100).sessions.none { it.id == run.sessionId },
@@ -117,7 +117,7 @@ class CronE2eTest {
         chat.sendAndAwaitReply("Reply with exactly the word: reply-ok", "reply-ok")
         chat.awaitState { !it.running } ?: throw AssertionError("the reply's turn did not end: ${chat.state.value.lastAgentOutput()}")
 
-        val runs = app.cron.runs(job)
+        val runs = app.cron.runs(job).runs
         val replies = FinalReplies(app.sessions::finalReply)
         val entries = feedEntries(runs, runs.associate { it.sessionId to replies.of(it) })
         assertEquals("feed of $job: $entries", listOf(run.sessionId), entries.map { it.sessionId })

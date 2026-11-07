@@ -184,15 +184,15 @@ class SessionListViewModel(
     }
 
     /**
-     * Reads the job's [FEW_RUNS] newest runs, which hold a report unless the job has been silent for a while, and
-     * only then the most Hermes lists, to find when it last reported something.
+     * Reads the job's [FEW_RUNS] newest rows, which hold a report unless the job has been silent for a while, and
+     * only then, if there are older ones, the most Hermes lists, to find when it last reported something.
      */
     private suspend fun summaryOf(job: CronJob): CronJobSummary {
         val seenUntil = seenUntil(job.id)
         summaries[job.id]?.let { (lastRunAt, summary) -> if (lastRunAt == job.lastRunAt) return summary.copy(job = job).seenUpTo(seenUntil) }
         val newest = source.runs(job.id, FEW_RUNS)
-        val summary = summarizeJob(job, newest, seenUntil, source::finalReply).takeIf { it.latestShownRun != null || newest.size < FEW_RUNS }
-            ?: summarizeJob(job, source.runs(job.id, CronApi.MAX_RUNS), seenUntil, source::finalReply)
+        val summary = summarizeJob(job, newest.runs, seenUntil, source::finalReply).takeIf { it.latestShownRun != null || !newest.hasOlder }
+            ?: summarizeJob(job, source.runs(job.id, CronApi.MAX_RUNS).runs, seenUntil, source::finalReply)
         return summary.also { summaries[job.id] = job.lastRunAt to it }
     }
 
@@ -206,7 +206,7 @@ class SessionListViewModel(
         seen.markArchivePass(now)
         viewModelScope.launch {
             for (job in jobs) {
-                val runs = quietly("runs of cron job ${job.id} failed to load") { source.runs(job.id, CronApi.MAX_RUNS) } ?: continue
+                val runs = quietly("runs of cron job ${job.id} failed to load") { source.runs(job.id, CronApi.MAX_RUNS).runs } ?: continue
                 val old = quietly("old runs of cron job ${job.id} failed to load") {
                     runsToArchive(runs, seenUntil(job.id), now, source::finalReply)
                 } ?: continue

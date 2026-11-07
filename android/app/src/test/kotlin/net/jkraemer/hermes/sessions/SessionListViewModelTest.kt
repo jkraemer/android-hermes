@@ -281,4 +281,20 @@ class SessionListViewModelTest {
         settleUntil { archived.size == 2 }
         assertEquals(listOf("old-unread-silent", "old-read"), archived)
     }
+
+    @Test
+    fun tenNewestRowsWithScriptOnlyOutputAmongThemStillCountAsFull() {
+        seen.markArchivePass(NOW)
+        source.jobs = listOf(cronJob("j1"))
+        source.runs = mapOf("j1" to (1..30).map { cronRun("r$it", NOW.minusSeconds(it * 3_600L)) })
+        source.scriptOnlyRows = mapOf("j1" to 3)
+        source.replies = (1..7).associate { "r$it" to "[SILENT]" } + ("r8" to "News")
+        val model = viewModel()
+
+        model.refreshQuietly()
+
+        settleUntil { model.state.value.drawer.scheduled.isNotEmpty() }
+        assertEquals("r8", model.state.value.drawer.scheduled.single().latestShownRun?.sessionId)
+        assertEquals(listOf("j1" to 10, "j1" to 100), source.runsRequests)
+    }
 }

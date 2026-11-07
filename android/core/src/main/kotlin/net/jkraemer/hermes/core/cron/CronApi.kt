@@ -28,6 +28,9 @@ data class CronRun(
     val lastActive: Instant = startedAt,
 )
 
+/** A job's newest runs, newest first. [hasOlder] when Hermes listed as many rows as were asked for, so there may be more. */
+data class CronRunPage(val runs: List<CronRun>, val hasOlder: Boolean)
+
 @Serializable
 private data class JobRow(
     val id: String,
@@ -62,16 +65,19 @@ class CronApi(private val baseUrl: HttpUrl, private val client: OkHttpClient) {
     }
 
     /**
-     * The job's newest [limit] runs, newest first. Hermes also lists the output of runs that had no agent
-     * session (script-only jobs); those have nothing to open and are left out.
+     * The job's runs among its newest [limit] rows, newest first. Hermes also lists the output of runs that had no
+     * agent session (script-only jobs); those have nothing to open and are left out, but count towards [limit].
      */
-    suspend fun runs(jobId: String, limit: Int = MAX_RUNS): List<CronRun> = withContext(Dispatchers.IO) {
+    suspend fun runs(jobId: String, limit: Int = MAX_RUNS): CronRunPage = withContext(Dispatchers.IO) {
+        val rowLimit = limit.coerceIn(1, MAX_RUNS)
         val url = baseUrl.newBuilder().addPathSegments("api/cron/jobs").addPathSegment(jobId).addPathSegment("runs")
-            .addQueryParameter("limit", limit.coerceIn(1, MAX_RUNS).toString())
+            .addQueryParameter("limit", rowLimit.toString())
             .build()
-        json.decodeFromString<RunsResponse>(get(url)).runs.filter { it.source == "cron" }.map {
+        val rows = json.decodeFromString<RunsResponse>(get(url)).runs
+        val runs = rows.filter { it.source == "cron" }.map {
             CronRun(it.id, it.startedAt.toInstant(), running = it.schedulerOwned, archived = it.archived, lastActive = (it.lastActive ?: it.startedAt).toInstant())
         }
+        CronRunPage(runs, hasOlder = rows.size >= rowLimit)
     }
 
     private fun get(url: HttpUrl): String = client.bodyOf(Request.Builder().url(url).build())

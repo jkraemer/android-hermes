@@ -7,6 +7,8 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Assert.fail
 import org.junit.Before
@@ -70,7 +72,7 @@ class CronApiTest {
             {"id":"cron_j1_20261107_053000","source":"cron","started_at":1794029400.0,"ended_at":1794029410.0,"scheduler_owned":false,"archived":true}
         ],"limit":50}"""))
 
-        val runs = api.runs("j1", limit = 50)
+        val runs = api.runs("j1", limit = 50).runs
 
         val url = server.takeRequest().requestUrl!!
         assertEquals("/api/cron/jobs/j1/runs", url.encodedPath)
@@ -84,6 +86,23 @@ class CronApiTest {
             ),
             runs,
         )
+    }
+
+    @Test
+    fun aPageFilledByRowsThatAreNotSessionsStillHasOlderRuns() = runBlocking {
+        server.enqueue(MockResponse().setBody("""{"runs":[
+            {"id":"local-2","source":"cron","started_at":3.0},
+            {"id":"cron_output:j1:exec:0","source":"cron_output","started_at":2.0},
+            {"id":"local-1","source":"cron","started_at":1.0}
+        ]}"""))
+        server.enqueue(MockResponse().setBody("""{"runs":[{"id":"local-1","source":"cron","started_at":1.0}]}"""))
+
+        val full = api.runs("j1", limit = 3)
+        val last = api.runs("j1", limit = 3)
+
+        assertEquals(2, full.runs.size)
+        assertTrue(full.hasOlder)
+        assertFalse(last.hasOlder)
     }
 
     @Test
