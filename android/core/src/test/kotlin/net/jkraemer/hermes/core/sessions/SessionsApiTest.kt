@@ -215,11 +215,24 @@ class SessionsApiTest {
     }
 
     @Test
-    fun aFullLatestPageOfTheRunsOwnWorkEndsInTheReport() = runBlocking {
-        enqueueMessages(*(Array(9) { tool() } + said("Two new mails.")))
+    fun aFullLatestPageOfTheRunsOwnWorkIsReadFromTheStartToo() = runBlocking {
+        val transcript = arrayOf(user("check mail")) + Array(9) { tool() } + said("Two new mails.")
+        enqueueMessages(*transcript.takeLast(10).toTypedArray())
+        enqueueMessages(*transcript)
 
         assertEquals("Two new mails.", api.finalReply("s1"))
-        assertEquals(1, server.requestCount)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun anAnswerWithManyToolCallsAfterAReplyIsNotTheReport() = runBlocking {
+        // Each tool call is two rows, so the answer alone fills the latest page without a user row in it.
+        val answer = (1..6).flatMap { listOf("""{"role":"assistant","content":"","tool_calls":[{"id":"t$it"}]}""", tool()) } + said("Done.")
+        val transcript = listOf(user("check mail"), tool(), said("Two new mails."), user("Run six commands")) + answer
+        enqueueMessages(*transcript.takeLast(10).toTypedArray())
+        enqueueMessages(*transcript.toTypedArray())
+
+        assertEquals("Two new mails.", api.finalReply("s1"))
     }
 
     @Test

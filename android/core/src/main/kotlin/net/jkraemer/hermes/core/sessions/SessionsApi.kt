@@ -133,17 +133,13 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
 
     /**
      * A cron run's report: the text of its last assistant message before the user's first own message (the first
-     * one is the job's prompt), so a later answer to the user does not count. Null when there is none. A run ends
-     * with its report, so the latest few messages usually tell: all of them when the transcript is that short,
-     * and the run's own work when they hold no user message. Otherwise the run is read from its start.
+     * one is the job's prompt), so a later answer to the user does not count. Null when there is none. The latest
+     * few messages are the whole transcript of a short run; a longer one is read from its start, since an answer
+     * to the user can fill the latest page with tool calls alone.
      */
     suspend fun finalReply(id: String): String? = withContext(Dispatchers.IO) {
         val latest = messages(id, "latest", FINAL_REPLY_PAGE, offset = 0)
-        val run = when {
-            latest.size < FINAL_REPLY_PAGE -> latest.take(cronRunEnd(latest, MessageRow::isUser))
-            latest.none(MessageRow::isUser) -> latest
-            else -> runFromStart(id)
-        }
+        val run = if (latest.size < FINAL_REPLY_PAGE) latest.take(cronRunEnd(latest, MessageRow::isUser)) else runFromStart(id)
         run.lastOrNull { it.role == "assistant" && !it.displayText.isNullOrBlank() }?.displayText
     }
 
