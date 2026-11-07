@@ -45,6 +45,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLooper
 import java.io.IOException
 import java.time.Clock
 import java.time.Instant
@@ -709,7 +710,11 @@ class SessionListScreenTest {
 
         compose.onNodeWithTag("session-list").performScrollToIndex(50)
 
-        compose.waitUntil(10_000) { viewModel.state.value.items.filterIsInstance<TimelineItem.Row>().any { it.session.id == "o1" } }
+        // The pages are loaded on the main looper, which waitUntil alone does not run.
+        compose.waitUntil(10_000) {
+            ShadowLooper.idleMainLooper()
+            viewModel.state.value.items.filterIsInstance<TimelineItem.Row>().any { it.session.id == "o1" }
+        }
         assertEquals(listOf(0, 50, 100), source.listCalls.take(3))
     }
 
@@ -732,7 +737,11 @@ class SessionListScreenTest {
 
         compose.onNodeWithTag("session-list").performScrollToIndex(50)
 
-        compose.waitUntil(10_000) { viewModel.state.value.items.filterIsInstance<TimelineItem.Row>().any { it.session.id == "o1" } }
+        // The pages are loaded on the main looper, which waitUntil alone does not run.
+        compose.waitUntil(10_000) {
+            ShadowLooper.idleMainLooper()
+            viewModel.state.value.items.filterIsInstance<TimelineItem.Row>().any { it.session.id == "o1" }
+        }
         assertEquals(listOf(0, 50, 100), source.listCalls.take(3))
     }
 
