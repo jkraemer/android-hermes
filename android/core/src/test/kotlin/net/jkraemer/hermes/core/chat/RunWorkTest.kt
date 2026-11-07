@@ -35,6 +35,20 @@ class RunWorkTest {
     }
 
     @Test
+    fun aMarkerHermesWroteAsAUserRowDoesNotEndTheRun() {
+        val items = listOf(prompt, said("Checking."), ChatItem.User("[Note: model switched]", displayKind = "model_switch"), said("Two new mails."))
+
+        assertEquals(RunWork(end = 3, steps = 3), cronRunWork(items))
+    }
+
+    @Test
+    fun aPromptShownAsASkillInvocationIsThePrompt() {
+        val items = listOf(ChatItem.User("/attention-check", displayKind = "skill_invocation"), said("Two new mails."), ChatItem.User("thanks"), said("Welcome."))
+
+        assertEquals(RunWork(end = 1, steps = 1), cronRunWork(items))
+    }
+
+    @Test
     fun anEmptyChatHasNoWork() {
         assertNull(cronRunWork(emptyList()))
     }

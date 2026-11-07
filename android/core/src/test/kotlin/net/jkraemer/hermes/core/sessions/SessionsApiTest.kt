@@ -264,6 +264,29 @@ class SessionsApiTest {
     }
 
     @Test
+    fun aHiddenSystemNoteAfterThePromptIsNotAReply() = runBlocking {
+        enqueueMessages(
+            user("check mail"),
+            """{"role":"user","content":"[System: the previous turn was interrupted]","display_kind":"hidden"}""",
+            said("Two new mails."),
+        )
+
+        assertEquals("Two new mails.", api.finalReply("s1"))
+    }
+
+    @Test
+    fun aModelSwitchMarkerAfterThePromptIsNotAReply() = runBlocking {
+        enqueueMessages(
+            user("check mail"),
+            said("Checking."),
+            """{"role":"user","content":"[Note: model was just switched to x]","display_kind":"model_switch"}""",
+            said("Two new mails."),
+        )
+
+        assertEquals("Two new mails.", api.finalReply("s1"))
+    }
+
+    @Test
     fun finalReplyIsNullWithoutAnAssistantMessage() = runBlocking {
         enqueueMessages("""{"role":"user","content":"prompt"}""", """{"role":"tool","content":"ok"}""")
 

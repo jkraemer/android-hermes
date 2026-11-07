@@ -27,7 +27,15 @@ data class ToolCall(val toolId: String, val name: String, val summary: String?, 
 data class ClarifyQuestion(val qid: String, val question: String, val choices: List<String>, val multiSelect: Boolean)
 
 sealed interface ChatItem {
-    data class User(val text: String) : ChatItem
+    /**
+     * A user row. [displayKind] is Hermes' type for a row it wrote itself in the user's place, such as a
+     * `model_switch` marker; null for what the user wrote. `skill_invocation` is what the user wrote too, shown as
+     * the skill they invoked.
+     */
+    data class User(val text: String, val displayKind: String? = null) : ChatItem {
+        /** Whether the user wrote it. */
+        val isOwn: Boolean get() = isOwnUserMessage(displayKind)
+    }
     data class Assistant(val markdown: String, val streaming: Boolean) : ChatItem
 
     /** Consecutive tool calls share one item. */

@@ -14,6 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import net.jkraemer.hermes.core.bodyOf
 import net.jkraemer.hermes.core.chat.cronRunEnd
+import net.jkraemer.hermes.core.chat.isOwnUserMessage
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -64,12 +65,18 @@ private data class SearchResponse(val results: List<SessionRow>)
 
 /** A transcript message; [content] is a list of parts for a message that is not plain text. */
 @Serializable
-private data class MessageRow(val role: String? = null, val text: String? = null, val content: JsonElement? = null) {
+private data class MessageRow(
+    val role: String? = null,
+    val text: String? = null,
+    val content: JsonElement? = null,
+    @SerialName("display_kind") val displayKind: String? = null,
+) {
     /** What the transcript shows, as the chat reads it: [text], else plain-text [content]. */
     val displayText: String?
         get() = text ?: (content as? JsonPrimitive)?.takeIf { it.isString }?.content
 
-    val isUser: Boolean get() = role == "user"
+    /** Whether the user wrote it, rather than Hermes in the user's place. */
+    val isUsersOwn: Boolean get() = role == "user" && isOwnUserMessage(displayKind)
 }
 
 @Serializable
@@ -139,7 +146,7 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
      */
     suspend fun finalReply(id: String): String? = withContext(Dispatchers.IO) {
         val latest = messages(id, "latest", FINAL_REPLY_PAGE, offset = 0)
-        val run = if (latest.size < FINAL_REPLY_PAGE) latest.take(cronRunEnd(latest, MessageRow::isUser)) else runFromStart(id)
+        val run = if (latest.size < FINAL_REPLY_PAGE) latest.take(cronRunEnd(latest, MessageRow::isUsersOwn)) else runFromStart(id)
         run.lastOrNull { it.role == "assistant" && !it.displayText.isNullOrBlank() }?.displayText
     }
 
@@ -149,7 +156,7 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
         while (true) {
             val page = messages(id, "oldest", RUN_PAGE, offset = read.size)
             read += page
-            val end = cronRunEnd(read, MessageRow::isUser)
+            val end = cronRunEnd(read, MessageRow::isUsersOwn)
             if (end < read.size || page.size < RUN_PAGE) return read.take(end)
         }
     }

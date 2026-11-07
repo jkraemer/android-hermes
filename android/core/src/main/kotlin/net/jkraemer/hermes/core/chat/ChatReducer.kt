@@ -50,7 +50,7 @@ private fun transcriptItems(messages: List<JsonObject>): List<ChatItem> {
     for (message in messages) {
         val text = message["text"].string() ?: message["content"].string() ?: ""
         when (message["role"].string()) {
-            "user" -> items += ChatItem.User(text)
+            "user" -> items += ChatItem.User(text, message["display_kind"].string())
             "assistant" -> items += ChatItem.Assistant(text, streaming = false)
             "tool" -> {
                 val call = ToolCall(

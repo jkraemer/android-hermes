@@ -26,6 +26,23 @@ class ChatReducerTest {
     private fun approval(params: String = """{"request_id":"r1","command":"rm x"}""") =
         run(empty, request("srq-1", "approval", params)).items.single() as ChatItem.Approval
 
+    @Test fun aTranscriptUserRowKeepsItsDisplayKind() {
+        val messages = listOf(
+            obj("""{"role":"user","text":"/attention-check","display_kind":"skill_invocation"}"""),
+            obj("""{"role":"user","text":"[Note: model switched]","display_kind":"model_switch"}"""),
+            obj("""{"role":"user","text":"thanks"}"""),
+        )
+        val state = reduce(empty, ChatInput.Transcript(messages, running = false))
+        assertEquals(
+            listOf(
+                ChatItem.User("/attention-check", displayKind = "skill_invocation"),
+                ChatItem.User("[Note: model switched]", displayKind = "model_switch"),
+                ChatItem.User("thanks"),
+            ),
+            state.items,
+        )
+    }
+
     @Test fun transcriptMapsRoles() {
         val messages = listOf(
             obj("""{"role":"user","text":"hi","unknown":1}"""),
