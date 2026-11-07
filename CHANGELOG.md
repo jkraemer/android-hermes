@@ -4,6 +4,8 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-07
+
 ### Added
 
 - Cron jobs get one entry each instead of one per run: in a new "Scheduled"
