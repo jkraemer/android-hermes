@@ -187,4 +187,98 @@ class SessionListViewModelTest {
         settleUntil { model.state.value.items.any { it is net.jkraemer.hermes.core.timeline.TimelineItem.Row && it.session.id == "o1" } }
         assertEquals(listOf(0, 50, 100, 150), source.listCalls)
     }
+
+    @Test
+    fun aJobsSummaryReadsOnlyItsTenNewestRunsWhenOneOfThemReported() {
+        seen.markArchivePass(NOW)
+        source.jobs = listOf(cronJob("j1"))
+        source.runs = mapOf("j1" to (1..30).map { cronRun("r$it", NOW.minusSeconds(it * 3_600L)) })
+        source.replies = mapOf("r1" to "[SILENT]", "r2" to "News")
+        val model = viewModel()
+
+        model.refreshQuietly()
+
+        settleUntil { model.state.value.drawer.scheduled.isNotEmpty() }
+        assertEquals("r2", model.state.value.drawer.scheduled.single().latestShownRun?.sessionId)
+        assertEquals(listOf("j1" to 10), source.runsRequests)
+    }
+
+    @Test
+    fun aJobWhoseTenNewestRunsWereSilentLooksFurtherBack() {
+        seen.markArchivePass(NOW)
+        source.jobs = listOf(cronJob("j1"))
+        source.runs = mapOf("j1" to (1..30).map { cronRun("r$it", NOW.minusSeconds(it * 3_600L)) })
+        source.replies = (1..10).associate { "r$it" to "[SILENT]" } + ("r11" to "News")
+        val model = viewModel()
+
+        model.refreshQuietly()
+
+        settleUntil { model.state.value.drawer.scheduled.isNotEmpty() }
+        assertEquals("r11", model.state.value.drawer.scheduled.single().latestShownRun?.sessionId)
+        assertEquals(listOf("j1" to 10, "j1" to 100), source.runsRequests)
+    }
+
+    @Test
+    fun aJobWithFewerThanTenRunsAndNoReportIsNotReadAgain() {
+        seen.markArchivePass(NOW)
+        source.jobs = listOf(cronJob("j1"))
+        source.runs = mapOf("j1" to listOf(cronRun("r1", NOW.minusSeconds(3_600))))
+        source.replies = mapOf("r1" to "[SILENT]")
+        val model = viewModel()
+
+        model.refreshQuietly()
+
+        settleUntil { model.state.value.drawer.scheduled.isNotEmpty() }
+        settle()
+        assertEquals(listOf("j1" to 10), source.runsRequests)
+    }
+
+    @Test
+    fun aJobThatFailsToLoadKeepsWhatItShowedAndTheOthersAreUpdated() {
+        seen.markArchivePass(NOW)
+        source.jobs = listOf(cronJob("j1", lastRunAt = daysAgo(1)), cronJob("j2", lastRunAt = daysAgo(1)))
+        source.runs = mapOf("j1" to listOf(cronRun("a1", daysAgo(1))), "j2" to listOf(cronRun("b1", daysAgo(1))))
+        source.replies = mapOf("a1" to "A news", "b1" to "B news")
+        val model = viewModel()
+        model.refreshQuietly()
+        settleUntil { model.state.value.drawer.scheduled.size == 2 }
+
+        // Both jobs ran again; j1's runs can no longer be read.
+        source.jobs = listOf(cronJob("j1", lastRunAt = NOW), cronJob("j2", lastRunAt = NOW))
+        source.runs = mapOf("j1" to listOf(cronRun("a2", NOW.minusSeconds(60))), "j2" to listOf(cronRun("b2", NOW.minusSeconds(60))))
+        source.replies = mapOf("a2" to "Newer A", "b2" to "Newer B")
+        source.failingRuns = setOf("j1")
+        model.refreshQuietly()
+
+        settleUntil { model.state.value.drawer.scheduled.any { it.latestShownRun?.sessionId == "b2" } }
+        assertEquals(setOf("a1", "b2"), model.state.value.drawer.scheduled.map { it.latestShownRun?.sessionId }.toSet())
+        assertTrue(logged.toString(), logged.any { it.startsWith("cron job j1 failed to load") })
+    }
+
+    @Test
+    fun aJobThatFailsOnItsFirstLoadIsLeftOutWhileTheOthersShow() {
+        seen.markArchivePass(NOW)
+        source.jobs = listOf(cronJob("j1"), cronJob("j2"))
+        source.runs = mapOf("j2" to listOf(cronRun("b1", daysAgo(1))))
+        source.replies = mapOf("b1" to "B news")
+        source.failingRuns = setOf("j1")
+        val model = viewModel()
+
+        model.refreshQuietly()
+
+        settleUntil { model.state.value.drawer.scheduled.isNotEmpty() }
+        assertEquals(listOf("j2"), model.state.value.drawer.scheduled.map { it.job.id })
+    }
+
+    @Test
+    fun theOtherJobsRunsAreArchivedWhenOneJobFails() {
+        jobWithOldRuns()
+        source.jobs = listOf(cronJob("broken")) + source.jobs
+        source.failingRuns = setOf("broken")
+
+        viewModel().refresh()
+
+        settleUntil { archived.size == 2 }
+        assertEquals(listOf("old-unread-silent", "old-read"), archived)
+    }
 }

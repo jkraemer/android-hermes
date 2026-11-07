@@ -146,14 +146,15 @@ class SessionListViewModel(
 
     /**
      * Brings the cron jobs up to date, replacing a load in progress. A job whose last run is the one it was
-     * summarized for keeps its summary, with only its unread state renewed. Failures are left to the
-     * sessions' own load to report.
+     * summarized for keeps its summary, with only its unread state renewed. A job that fails to load keeps what it
+     * showed (or is left out until it loads) without holding up the others. Failures are logged; the sessions' own
+     * load reports a server that cannot be reached.
      */
     private fun loadJobs() {
         jobsLoad?.cancel()
         jobsLoad = viewModelScope.launch {
             val jobs = try {
-                coroutineScope { source.jobs().map { job -> async { summaryOf(job) } }.awaitAll() }
+                source.jobs()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: NotLoggedInException) {
@@ -163,19 +164,36 @@ class SessionListViewModel(
                 log.log("cron jobs failed to load: $e")
                 return@launch
             }
-            loaded.update { it.copy(jobs = jobs) }
-            archiveOldRunsWhenDue(jobs.map { it.job })
+            val summaries = coroutineScope { jobs.map { job -> async { summaryOrLast(job) } }.awaitAll() }
+            loaded.update { it.copy(jobs = summaries.filterNotNull()) }
+            archiveOldRunsWhenDue(jobs)
         }
     }
 
     /** How far the job was seen; a job never opened counts as seen at the baseline, as a session does. */
     private fun seenUntil(jobId: String): Instant = seen.jobSeenUntil(jobId) ?: seen.baseline
 
+    /** The job's summary; when it cannot be made, the last one it had, if any. */
+    private suspend fun summaryOrLast(job: CronJob): CronJobSummary? = try {
+        summaryOf(job)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        if (e is NotLoggedInException) loaded.update { it.copy(needsLogin = true) } else log.log("cron job ${job.id} failed to load: $e")
+        summaries[job.id]?.second?.copy(job = job)?.seenUpTo(seenUntil(job.id))
+    }
+
+    /**
+     * Reads the job's [FEW_RUNS] newest runs, which hold a report unless the job has been silent for a while, and
+     * only then the most Hermes lists, to find when it last reported something.
+     */
     private suspend fun summaryOf(job: CronJob): CronJobSummary {
         val seenUntil = seenUntil(job.id)
         summaries[job.id]?.let { (lastRunAt, summary) -> if (lastRunAt == job.lastRunAt) return summary.copy(job = job).seenUpTo(seenUntil) }
-        return summarizeJob(job, source.runs(job.id, CronApi.MAX_RUNS), seenUntil, source::finalReply)
-            .also { summaries[job.id] = job.lastRunAt to it }
+        val newest = source.runs(job.id, FEW_RUNS)
+        val summary = summarizeJob(job, newest, seenUntil, source::finalReply).takeIf { it.latestShownRun != null || newest.size < FEW_RUNS }
+            ?: summarizeJob(job, source.runs(job.id, CronApi.MAX_RUNS), seenUntil, source::finalReply)
+        return summary.also { summaries[job.id] = job.lastRunAt to it }
     }
 
     /**
@@ -301,6 +319,7 @@ class SessionListViewModel(
 
     private companion object {
         val ARCHIVE_INTERVAL: Duration = Duration.ofHours(24)
+        const val FEW_RUNS = 10
         const val PAGE_SIZE = 50
         const val SEARCH_LIMIT = 20
         const val SEARCH_DEBOUNCE_MS = 300L

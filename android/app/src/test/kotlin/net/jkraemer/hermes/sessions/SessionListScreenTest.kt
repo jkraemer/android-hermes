@@ -95,6 +95,16 @@ internal class FakeSource(
     /** Runs whose final reply fails to load. */
     var failingReplies = emptySet<String>()
 
+    /** Jobs whose runs fail to load. */
+    var failingRuns = emptySet<String>()
+
+    /** Every runs request, as job id and limit. */
+    val runsRequests = CopyOnWriteArrayList<Pair<String, Int>>()
+
+    /** How many final replies are being read at once now, and at most so far. */
+    @Volatile var repliesInFlight = 0
+    @Volatile var mostRepliesInFlight = 0
+
     /** When set, a reload of the first page waits for it. */
     var firstPageGate: CompletableDeferred<Unit>? = null
 
@@ -124,13 +134,23 @@ internal class FakeSource(
     override suspend fun runs(jobId: String, limit: Int): List<CronRun> {
         failure?.let { throw it }
         runsCalls += jobId
+        runsRequests += jobId to limit
+        if (jobId in failingRuns) throw IOException("runs of $jobId failed")
         return runs[jobId].orEmpty().take(limit)
     }
 
     override suspend fun finalReply(run: CronRun): String? {
-        replyGate?.await()
-        if (run.sessionId in failingReplies) throw IOException("reply of ${run.sessionId} failed")
-        return replies[run.sessionId]
+        synchronized(this) {
+            repliesInFlight++
+            mostRepliesInFlight = maxOf(mostRepliesInFlight, repliesInFlight)
+        }
+        try {
+            replyGate?.await()
+            if (run.sessionId in failingReplies) throw IOException("reply of ${run.sessionId} failed")
+            return replies[run.sessionId]
+        } finally {
+            synchronized(this) { repliesInFlight-- }
+        }
     }
 
     override suspend fun update(id: String, title: String?, pinned: Boolean?, archived: Boolean?) {
