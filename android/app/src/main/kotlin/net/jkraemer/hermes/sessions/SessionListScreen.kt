@@ -118,11 +118,14 @@ fun SessionListScreen(
             viewModel.loginHandled()
         }
     }
+    // Keyed on the item count too: a page that adds only a few rows leaves the end in view, and must still lead
+    // to the next one.
     LaunchedEffect(listState) {
         snapshotFlow {
             val info = listState.layoutInfo
-            (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - PREFETCH_DISTANCE
-        }.collect { nearEnd -> if (nearEnd) viewModel.loadMore() }
+            val nearEnd = (info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - PREFETCH_DISTANCE
+            nearEnd to info.totalItemsCount
+        }.collect { (nearEnd, _) -> if (nearEnd) viewModel.loadMore() }
     }
 
     Scaffold(

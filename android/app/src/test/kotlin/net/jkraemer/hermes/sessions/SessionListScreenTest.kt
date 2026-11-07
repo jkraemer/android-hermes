@@ -714,6 +714,29 @@ class SessionListScreenTest {
     }
 
     @Test
+    fun aPageThatAddsFewRowsStillLoadsTheNextWhileTheEndIsInView() {
+        val first = (1..50).map { session("s$it", lastActive = NOW.minusSeconds(it * 60L)) }
+        // The second page adds a single row to the list; the end of the list stays in view.
+        val second = listOf(session("t1", lastActive = NOW.minusSeconds(4_000))) +
+            (1..49).map { session("e$it", lastActive = NOW.minusSeconds(4_100L + it * 60)).copy(messageCount = 0) }
+        val third = (1..50).map { session("o$it", lastActive = NOW.minusSeconds(8_000L + it * 60)) }
+        // The first page arrives after the empty list was laid out, as from a real server.
+        val gate = CompletableDeferred<Unit>()
+        source.firstPageGate = gate
+        show(*(first + second + third).toTypedArray())
+        compose.waitUntil(10_000) { source.listCalls.isNotEmpty() }
+        compose.waitForIdle()
+        gate.complete(Unit)
+        compose.waitUntil(10_000) { viewModel.state.value.items.size == 51 }
+        source.firstPageGate = null
+
+        compose.onNodeWithTag("session-list").performScrollToIndex(50)
+
+        compose.waitUntil(10_000) { viewModel.state.value.items.filterIsInstance<TimelineItem.Row>().any { it.session.id == "o1" } }
+        assertEquals(listOf(0, 50, 100), source.listCalls.take(3))
+    }
+
+    @Test
     fun unreachableServerShowsConnectionHintAndRetries() {
         source.failure = IOException("timeout")
         show()
