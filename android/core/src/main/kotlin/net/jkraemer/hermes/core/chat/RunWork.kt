@@ -12,7 +12,7 @@ data class RunWork(val end: Int, val steps: Int)
  * yet, the whole run is work. Null when there is nothing before the final reply.
  */
 fun cronRunWork(items: List<ChatItem>): RunWork? {
-    val runEnd = items.withIndex().filter { it.value is ChatItem.User }.getOrNull(1)?.index ?: items.size
+    val runEnd = cronRunEnd(items) { it is ChatItem.User }
     val finalReply = (0 until runEnd).lastOrNull { val item = items[it]; item is ChatItem.Assistant && item.markdown.isNotBlank() }
     val end = finalReply ?: runEnd
     if (end == 0) return null
@@ -25,3 +25,10 @@ fun cronRunWork(items: List<ChatItem>): RunWork? {
     }
     return RunWork(end, steps)
 }
+
+/**
+ * Where a cron run ends in its session's [messages]: at the user's first own message, since the first one is the
+ * job's prompt; the whole transcript while there is none.
+ */
+fun <T> cronRunEnd(messages: List<T>, isUser: (T) -> Boolean): Int =
+    messages.withIndex().filter { isUser(it.value) }.getOrNull(1)?.index ?: messages.size

@@ -173,6 +173,7 @@ class SessionsApiTest {
         assertEquals("/api/sessions/a%2Fb/messages", url.encodedPath)
         assertEquals("latest", url.queryParameter("order"))
         assertEquals("10", url.queryParameter("limit"))
+        assertEquals("false", url.queryParameter("inline_images"))
     }
 
     @Test
@@ -198,6 +199,54 @@ class SessionsApiTest {
         )
 
         assertEquals("Shown text", api.finalReply("s1"))
+    }
+
+    private fun user(text: String) = """{"role":"user","content":"$text"}"""
+    private fun said(text: String) = """{"role":"assistant","content":"$text"}"""
+    private fun tool() = """{"role":"tool","content":"ok"}"""
+
+    @Test
+    fun theFinalReplyIsTheRunsReportNotTheAnswerToALaterReply() = runBlocking {
+        enqueueMessages(user("[IMPORTANT: cron] check mail"), tool(), said("Two new mails."), user("Which ones?"), said("From Anna and Bob."))
+
+        assertEquals("Two new mails.", api.finalReply("s1"))
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun aFullLatestPageOfTheRunsOwnWorkEndsInTheReport() = runBlocking {
+        enqueueMessages(*(Array(9) { tool() } + said("Two new mails.")))
+
+        assertEquals("Two new mails.", api.finalReply("s1"))
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun aFullLatestPageWithAReplyInItReadsTheRunFromItsStart() = runBlocking {
+        // The latest page: the end of the run's work, the user's reply and the answer.
+        enqueueMessages(*(Array(6) { tool() } + said("Two new mails.") + user("Which ones?") + tool() + said("From Anna and Bob.")))
+        // From the start, in pages of 50: the prompt and the run's long work, then its report and the reply.
+        enqueueMessages(*(arrayOf(user("[IMPORTANT: cron] check mail")) + Array(49) { tool() }))
+        enqueueMessages(said("Two new mails."), user("Which ones?"), said("From Anna and Bob."))
+
+        assertEquals("Two new mails.", api.finalReply("s1"))
+
+        server.takeRequest()
+        val first = server.takeRequest().requestUrl!!
+        assertEquals(listOf("oldest", "50", "0", "false"), listOf("order", "limit", "offset", "inline_images").map { first.queryParameter(it) })
+        assertEquals("50", server.takeRequest().requestUrl!!.queryParameter("offset"))
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun readingFromTheStartStopsAtTheEndOfTheTranscript() = runBlocking {
+        // Exactly one page long, so the latest page cannot tell whether its user message is the prompt.
+        val transcript = arrayOf(user("check mail")) + Array(8) { tool() } + said("All quiet.")
+        enqueueMessages(*transcript)
+        enqueueMessages(*transcript)
+
+        assertEquals("All quiet.", api.finalReply("s1"))
+        assertEquals(2, server.requestCount)
     }
 
     @Test

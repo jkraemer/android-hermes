@@ -13,6 +13,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import net.jkraemer.hermes.core.bodyOf
+import net.jkraemer.hermes.core.chat.cronRunEnd
 import okhttp3.HttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -67,6 +68,8 @@ private data class MessageRow(val role: String? = null, val text: String? = null
     /** What the transcript shows, as the chat reads it: [text], else plain-text [content]. */
     val displayText: String?
         get() = text ?: (content as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+    val isUser: Boolean get() = role == "user"
 }
 
 @Serializable
@@ -126,21 +129,47 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
         }
 
     /**
-     * The text of the session's last assistant message that has any: for a finished cron run, the reply it
-     * delivered. Only the latest few messages are read, since a run ends with its reply. Null when there is none.
+     * A cron run's report: the text of its last assistant message before the user's first own message (the first
+     * one is the job's prompt), so a later answer to the user does not count. Null when there is none. A run ends
+     * with its report, so the latest few messages usually tell: all of them when the transcript is that short,
+     * and the run's own work when they hold no user message. Otherwise the run is read from its start.
      */
     suspend fun finalReply(id: String): String? = withContext(Dispatchers.IO) {
+        val latest = messages(id, "latest", FINAL_REPLY_PAGE, offset = 0)
+        val run = when {
+            latest.size < FINAL_REPLY_PAGE -> latest.take(cronRunEnd(latest, MessageRow::isUser))
+            latest.none(MessageRow::isUser) -> latest
+            else -> runFromStart(id)
+        }
+        run.lastOrNull { it.role == "assistant" && !it.displayText.isNullOrBlank() }?.displayText
+    }
+
+    /** The run's messages from the start of its session up to the user's first own message, read page by page. */
+    private fun runFromStart(id: String): List<MessageRow> {
+        val read = mutableListOf<MessageRow>()
+        while (true) {
+            val page = messages(id, "oldest", RUN_PAGE, offset = read.size)
+            read += page
+            val end = cronRunEnd(read, MessageRow::isUser)
+            if (end < read.size || page.size < RUN_PAGE) return read.take(end)
+        }
+    }
+
+    /** A page of the session's messages, in chronological order; images are left out, as only text is read. */
+    private fun messages(id: String, order: String, limit: Int, offset: Int): List<MessageRow> {
         val url = baseUrl.newBuilder().addPathSegments("api/sessions").addPathSegment(id).addPathSegment("messages")
-            .addQueryParameter("order", "latest")
-            .addQueryParameter("limit", FINAL_REPLY_PAGE.toString())
+            .addQueryParameter("order", order)
+            .addQueryParameter("limit", limit.toString())
+            .addQueryParameter("offset", offset.toString())
+            .addQueryParameter("inline_images", "false")
             .build()
-        // The latest page comes in chronological order, newest last.
-        json.decodeFromString<MessagesResponse>(get(url)).messages.lastOrNull { it.role == "assistant" && !it.displayText.isNullOrBlank() }?.displayText
+        return json.decodeFromString<MessagesResponse>(get(url)).messages
     }
 
     private fun get(url: HttpUrl): String = client.bodyOf(Request.Builder().url(url).build())
 
     private companion object {
         const val FINAL_REPLY_PAGE = 10
+        const val RUN_PAGE = 50
     }
 }
