@@ -169,4 +169,22 @@ class SessionListViewModelTest {
         assertEquals(listOf("cron jobs failed to load: java.io.IOException: timeout"), logged)
         assertEquals(null, model.state.value.error)
     }
+
+    @Test
+    fun loadingMoreGoesOnUntilAPageAddsRowsToTheList() {
+        seen.markArchivePass(NOW)
+        val listed = (1..50).map { session("s$it", lastActive = NOW.minusSeconds(it * 60L)) }
+        // Chats opened but never written to are not listed: two whole pages of them add nothing.
+        val empty = (1..100).map { session("e$it", lastActive = NOW.minusSeconds(4_000L + it * 60)).copy(messageCount = 0) }
+        source.sessions = listed + empty + session("o1", lastActive = NOW.minusSeconds(20_000))
+        source.total = source.sessions.size
+        val model = viewModel()
+        model.refresh()
+        settleUntil { model.state.value.items.isNotEmpty() }
+
+        model.loadMore()
+
+        settleUntil { model.state.value.items.any { it is net.jkraemer.hermes.core.timeline.TimelineItem.Row && it.session.id == "o1" } }
+        assertEquals(listOf(0, 50, 100, 150), source.listCalls)
+    }
 }

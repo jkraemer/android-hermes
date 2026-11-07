@@ -32,6 +32,7 @@ import net.jkraemer.hermes.core.timeline.DrawerEntries
 import net.jkraemer.hermes.core.timeline.TimelineItem
 import net.jkraemer.hermes.core.timeline.buildDrawerEntries
 import net.jkraemer.hermes.core.timeline.buildTimeline
+import net.jkraemer.hermes.core.timeline.isListed
 import net.jkraemer.hermes.settings.SeenStore
 import java.io.IOException
 import java.time.Clock
@@ -206,13 +207,21 @@ class SessionListViewModel(
         null
     }
 
-    /** Appends the next page when there is one. */
+    /**
+     * Appends the next page when there is one, and the ones after it while a page adds nothing to the list (only
+     * chats never written to, say): the list asks for more only when its end comes into view, which it already is.
+     */
     fun loadMore() {
         val current = loaded.value
         if (current.query.isNotBlank() || current.sessions.size >= current.total || loadJob?.isActive == true) return
         loadJob = viewModelScope.launch {
-            attempt { source.list(current.sessions.size, PAGE_SIZE) }?.let { page ->
+            while (true) {
+                val offset = loaded.value.sessions.size
+                val page = attempt { source.list(offset, PAGE_SIZE) } ?: return@launch
                 loaded.update { it.copy(sessions = (it.sessions + page.sessions).distinctBy(SessionSummary::id), total = page.total) }
+                // A page of sessions already loaded (the list shifted meanwhile) would be asked for again and again.
+                val grew = loaded.value.sessions.size > offset
+                if (page.sessions.any { it.isListed } || !grew || loaded.value.sessions.size >= page.total) return@launch
             }
         }
     }

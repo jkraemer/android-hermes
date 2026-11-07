@@ -181,11 +181,11 @@ class SessionsDrawerTest {
     }
 
     @Test
-    fun tappingAPinnedCronRunOpensItAsACronChat() {
+    fun aPinnedCronRunIsNotInTheDrawerAndAChatEntryOpensAsAChat() {
         show(listOf(session("a", title = "Chat title"), session("b", title = "Nightly run", source = "cron", pinned = true)))
-        waitForText("Nightly run")
-        compose.onNodeWithText("Nightly run").performClick()
+        waitForText("Chat title")
+        compose.onAllNodes(hasText("Nightly run")).assertCountEquals(0)
         compose.onNodeWithText("Chat title").performClick()
-        assertEquals(listOf(true, false), openedCron)
+        assertEquals(listOf(false), openedCron)
     }
 }

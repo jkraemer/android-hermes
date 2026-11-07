@@ -32,6 +32,7 @@ import net.jkraemer.hermes.core.sessions.SearchHit
 import net.jkraemer.hermes.core.sessions.SessionPage
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.Snippet
+import net.jkraemer.hermes.core.timeline.TimelineItem
 import net.jkraemer.hermes.settings.SeenStore
 import net.jkraemer.hermes.core.cron.CronJob
 import net.jkraemer.hermes.core.cron.CronRun
@@ -669,6 +670,21 @@ class SessionListScreenTest {
 
         compose.waitUntil(10_000) { source.listCalls.size >= 2 }
         assertEquals(listOf(0, 50), source.listCalls.take(2))
+    }
+
+    @Test
+    fun loadingGoesOnPastAPageThatAddsNoRows() {
+        // Chats opened but never written to are not listed, so the second page adds nothing to the list.
+        val listed = (1..50).map { session("s$it", lastActive = NOW.minusSeconds(it * 60L)) }
+        val empty = (1..50).map { session("e$it", lastActive = NOW.minusSeconds(4_000L + it * 60)).copy(messageCount = 0) }
+        val older = (1..5).map { session("o$it", lastActive = NOW.minusSeconds(8_000L + it * 60)) }
+        show(*(listed + empty + older).toTypedArray())
+        compose.waitUntil(10_000) { source.listCalls.isNotEmpty() }
+
+        compose.onNodeWithTag("session-list").performScrollToIndex(50)
+
+        compose.waitUntil(10_000) { viewModel.state.value.items.filterIsInstance<TimelineItem.Row>().any { it.session.id == "o1" } }
+        assertEquals(listOf(0, 50, 100), source.listCalls.take(3))
     }
 
     @Test

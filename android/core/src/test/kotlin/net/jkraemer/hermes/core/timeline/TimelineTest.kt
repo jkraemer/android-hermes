@@ -210,8 +210,10 @@ class TimelineTest {
     }
 
     @Test
-    fun drawerKeepsAPinnedCronRunAmongThePinned() {
-        assertEquals(listOf("pinnedRun"), drawer(listOf(session("pinnedRun", at(5, 10), pinned = true, source = "cron"))).pinned.map { it.session.id })
+    fun drawerLeavesOutAPinnedCronRunToo() {
+        val entries = drawer(listOf(session("pinnedRun", at(5, 10), pinned = true, source = "cron"), session("pin", at(5, 9), pinned = true)))
+
+        assertEquals(listOf("pin"), entries.pinned.map { it.session.id })
     }
 
     @Test

@@ -59,7 +59,7 @@ fun buildTimeline(
 private val SessionSummary.hasMessages: Boolean get() = messageCount > 0
 
 /** Whether the session is listed as itself: a cron run is listed through its job. */
-private val SessionSummary.isListed: Boolean get() = hasMessages && !isCron
+val SessionSummary.isListed: Boolean get() = hasMessages && !isCron
 
 private fun rowOf(session: SessionSummary, lastOpened: Map<String, Instant>, seenBaseline: Instant, needsAnswer: Set<String>) =
     TimelineItem.Row(
@@ -78,8 +78,8 @@ data class DrawerEntries(
 private const val DRAWER_RECENTS = 10
 
 /**
- * The sessions are newest first; the recents leave out cron runs, whose [jobs] are listed instead, and are cut
- * off after [DRAWER_RECENTS]. The jobs are newest first by their time; those that never reported anything come
+ * The sessions are newest first, without cron runs, whose [jobs] are listed instead; the recents are cut off
+ * after [DRAWER_RECENTS]. The jobs are newest first by their time; those that never reported anything come
  * last, by name.
  */
 fun buildDrawerEntries(
@@ -89,8 +89,8 @@ fun buildDrawerEntries(
     seenBaseline: Instant,
     needsAnswer: Set<String>,
 ): DrawerEntries {
-    val (pinned, unpinned) = sessions.filter { it.hasMessages }.sortedByDescending { it.lastActive }.partition { it.pinned }
+    val (pinned, unpinned) = sessions.filter { it.isListed }.sortedByDescending { it.lastActive }.partition { it.pinned }
     fun row(session: SessionSummary) = rowOf(session, lastOpened, seenBaseline, needsAnswer)
     val scheduled = jobs.sortedWith(compareByDescending<CronJobSummary, Instant?>(nullsFirst()) { it.time }.thenBy { it.job.name })
-    return DrawerEntries(pinned.map(::row), unpinned.filter { it.isListed }.take(DRAWER_RECENTS).map(::row), scheduled)
+    return DrawerEntries(pinned.map(::row), unpinned.take(DRAWER_RECENTS).map(::row), scheduled)
 }

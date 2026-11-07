@@ -81,11 +81,14 @@ class SessionsApi(private val baseUrl: HttpUrl, private val client: OkHttpClient
     private val jsonMediaType = "application/json".toMediaType()
     private val excludedSources = EXCLUDED_SOURCES.joinToString(",")
 
+    /** Cron runs are listed through their jobs, so the list leaves them out; search still finds them. */
+    private val unlistedSources = (EXCLUDED_SOURCES + "cron").joinToString(",")
+
     suspend fun list(offset: Int = 0, limit: Int = 50): SessionPage = withContext(Dispatchers.IO) {
         val url = baseUrl.newBuilder().addPathSegments("api/sessions")
             .addQueryParameter("order", "recent")
             .addQueryParameter("archived", "exclude")
-            .addQueryParameter("exclude_sources", excludedSources)
+            .addQueryParameter("exclude_sources", unlistedSources)
             .addQueryParameter("limit", limit.coerceIn(1, 100).toString())
             .addQueryParameter("offset", offset.toString())
             .build()

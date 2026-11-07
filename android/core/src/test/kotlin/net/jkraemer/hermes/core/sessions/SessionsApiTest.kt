@@ -48,7 +48,8 @@ class SessionsApiTest {
         assertEquals("/api/sessions", url.encodedPath)
         assertEquals("recent", url.queryParameter("order"))
         assertEquals("exclude", url.queryParameter("archived"))
-        assertEquals("telegram,mattermost", url.queryParameter("exclude_sources"))
+        // Cron runs are listed through their jobs; search still finds them.
+        assertEquals("telegram,mattermost,cron", url.queryParameter("exclude_sources"))
         assertEquals("50", url.queryParameter("limit"))
         assertEquals("0", url.queryParameter("offset"))
     }
