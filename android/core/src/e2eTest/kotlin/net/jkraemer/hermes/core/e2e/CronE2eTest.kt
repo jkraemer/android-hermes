@@ -7,6 +7,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import net.jkraemer.hermes.core.cron.CronRun
+import net.jkraemer.hermes.core.cron.FinalReplies
+import net.jkraemer.hermes.core.cron.feedEntries
 import net.jkraemer.hermes.core.cron.isSilent
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -98,5 +100,28 @@ class CronE2eTest {
             "archived run ${run.sessionId} is still in the session list",
             app.sessions.list(limit = 100).sessions.none { it.id == run.sessionId },
         )
+    }
+
+    @Test
+    fun aReplyInARunsChatLeavesTheRunsReportAsItsFeedEntry() = runBlocking {
+        val app = connect()
+        val job = app.createJob(
+            uniqueName("e2e-reply"),
+            "This run always has news to report. Your report is the single word cron-ok, so your final response must be exactly: cron-ok",
+        )
+        val run = app.runOnce(job)
+
+        // What the feed's composer does: open the run's session and send the reply there.
+        val chat = app.newChat()
+        chat.open(run.sessionId)
+        chat.sendAndAwaitReply("Reply with exactly the word: reply-ok", "reply-ok")
+        chat.awaitState { !it.running } ?: throw AssertionError("the reply's turn did not end: ${chat.state.value.lastAgentOutput()}")
+
+        val runs = app.cron.runs(job)
+        val replies = FinalReplies(app.sessions::finalReply)
+        val entries = feedEntries(runs, runs.associate { it.sessionId to replies.of(it) })
+        assertEquals("feed of $job: $entries", listOf(run.sessionId), entries.map { it.sessionId })
+        assertTrue("the entry is not the run's report: ${entries.single().reply}", entries.single().reply.contains("cron-ok"))
+        assertFalse("the entry is the answer to the reply: ${entries.single().reply}", entries.single().reply.contains("reply-ok"))
     }
 }
