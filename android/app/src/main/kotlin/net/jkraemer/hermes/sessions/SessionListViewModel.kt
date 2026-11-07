@@ -167,8 +167,11 @@ class SessionListViewModel(
         }
     }
 
+    /** How far the job was seen; a job never opened counts as seen at the baseline, as a session does. */
+    private fun seenUntil(jobId: String): Instant = seen.jobSeenUntil(jobId) ?: seen.baseline
+
     private suspend fun summaryOf(job: CronJob): CronJobSummary {
-        val seenUntil = seen.jobSeenUntil(job.id) ?: seen.baseline
+        val seenUntil = seenUntil(job.id)
         summaries[job.id]?.let { (lastRunAt, summary) -> if (lastRunAt == job.lastRunAt) return summary.copy(job = job).seenUpTo(seenUntil) }
         return summarizeJob(job, source.runs(job.id, CronApi.MAX_RUNS), seenUntil, source::finalReply)
             .also { summaries[job.id] = job.lastRunAt to it }
@@ -186,7 +189,7 @@ class SessionListViewModel(
             for (job in jobs) {
                 val runs = quietly("runs of cron job ${job.id} failed to load") { source.runs(job.id, CronApi.MAX_RUNS) } ?: continue
                 val old = quietly("old runs of cron job ${job.id} failed to load") {
-                    runsToArchive(runs, seen.jobSeenUntil(job.id) ?: seen.baseline, now, source::finalReply)
+                    runsToArchive(runs, seenUntil(job.id), now, source::finalReply)
                 } ?: continue
                 for (run in old) quietly("archiving cron run ${run.sessionId} failed") { source.update(run.sessionId, null, null, true) }
             }
