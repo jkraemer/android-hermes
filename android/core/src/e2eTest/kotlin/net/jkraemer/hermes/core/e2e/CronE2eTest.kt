@@ -2,7 +2,9 @@ package net.jkraemer.hermes.core.e2e
 
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -123,5 +125,33 @@ class CronE2eTest {
         assertEquals("feed of $job: $entries", listOf(run.sessionId), entries.map { it.sessionId })
         assertTrue("the entry is not the run's report: ${entries.single().reply}", entries.single().reply.contains("cron-ok"))
         assertFalse("the entry is the answer to the reply: ${entries.single().reply}", entries.single().reply.contains("reply-ok"))
+    }
+
+    @Test
+    fun anAnswerWithManyToolCallsAfterAReplyLeavesTheRunsReport() = runBlocking {
+        val app = connect()
+        val job = app.createJob(
+            uniqueName("e2e-tools"),
+            "This run always has news to report. Your report is the single word cron-ok, so your final response must be exactly: cron-ok",
+        )
+        val run = app.runOnce(job)
+        val chat = app.newChat()
+        chat.open(run.sessionId)
+
+        // Each command needs the one before it, so the agent cannot batch them into one step.
+        chat.send(
+            "Use the terminal tool to run `echo 1`. Then, one call at a time, run echo with the number the previous " +
+                "command printed plus one, until you have run `echo 6`. After that, answer with exactly the word: done-ok",
+        )
+        chat.awaitState { it.hasFinishedReplyContaining("done-ok") && !it.running } ?: failMisstep(chat)
+
+        // The answer alone fills the latest page of the session, so the report can only be found from the start.
+        val latest = Json.parseToJsonElement(app.rest("GET", "api/sessions/${run.sessionId}/messages?order=latest&limit=10&inline_images=false"))
+            .jsonObject.getValue("messages").jsonArray.map { it.jsonObject }
+        if (latest.size < 10 || latest.any { it["role"]?.jsonPrimitive?.content == "user" && (it["display_kind"] ?: JsonNull) == JsonNull }) {
+            failMisstep(chat)
+        }
+        val reply = app.sessions.finalReply(run.sessionId)
+        assertTrue("the run's report is not its final reply: $reply", reply?.contains("cron-ok") == true)
     }
 }

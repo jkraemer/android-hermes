@@ -53,10 +53,13 @@ class E2eClient private constructor(cookieFile: File) : AutoCloseable {
     val sessions = SessionsApi(baseUrl, httpClient)
     val cron = CronApi(baseUrl, httpClient)
 
-    /** A REST call the app itself does not make, e.g. to set up a cron job; it may take as long as a model turn. */
+    /**
+     * A REST call the app itself does not make, e.g. to set up a cron job; it may take as long as a model turn.
+     * [path] is relative to the server and may carry a query.
+     */
     suspend fun rest(method: String, path: String, json: String? = null): String = withContext(Dispatchers.IO) {
         val body = json?.toRequestBody("application/json".toMediaType()) ?: if (method == "POST") ByteArray(0).toRequestBody() else null
-        val request = Request.Builder().url(baseUrl.newBuilder().addPathSegments(path).build()).method(method, body).build()
+        val request = Request.Builder().url(baseUrl.resolve(path)!!).method(method, body).build()
         httpClient.newBuilder().readTimeout(Duration.ofMinutes(5)).build().newCall(request).execute().use { response ->
             val text = response.body!!.string()
             check(response.isSuccessful) { "$method $path failed with ${response.code}: $text" }
