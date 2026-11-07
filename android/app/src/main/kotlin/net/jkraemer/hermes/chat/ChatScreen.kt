@@ -81,6 +81,8 @@ import androidx.lifecycle.compose.currentStateAsState
 import com.mikepenz.markdown.m3.Markdown
 import com.mikepenz.markdown.model.State
 import net.jkraemer.hermes.core.chat.ChatItem
+import net.jkraemer.hermes.core.chat.RunWork
+import net.jkraemer.hermes.core.chat.cronRunWork
 import net.jkraemer.hermes.core.chat.ToolCall
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.sessions.ScheduleIcon
@@ -91,7 +93,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 
 /**
- * [cron] is whether this chat is a cron run, whose first message is the job's prompt and is shown collapsed.
+ * [cron] is whether this chat is a cron run, whose work before its final reply is shown collapsed.
  * [onOpenMenu] opens the navigation drawer, [onNewChat] starts another chat.
  * [onStoredSessionId] reports the stored id a new chat got, so the app can track the chat under it. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -185,9 +187,18 @@ private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatVi
     val glide = remember { mutableStateOf(false) }
     FollowTheEnd(listState, following, glide)
     val awayFromTheEnd by remember { derivedStateOf { !following.value && listState.canScrollForward } }
-    val jobPromptIndex = if (cron) chatItems.indexOfFirst { it is ChatItem.User } else -1
+    val work = if (cron) cronRunWork(chatItems) else null
+    var workShown by rememberSaveable { mutableStateOf(false) }
     Box(modifier.fillMaxWidth()) {
-        MessageList(chatItems, jobPromptIndex, parsedReplies, viewModel, clock, listState, composerHeight)
+        MessageList(
+            chatItems, work, workShown,
+            onToggleWork = {
+                workShown = !workShown
+                // The work opens above the reply; following the end would scroll it straight out of view.
+                if (workShown) following.value = false
+            },
+            parsedReplies, viewModel, clock, listState, composerHeight,
+        )
         ScrollToEndButton(
             awayFromTheEnd,
             onClick = {
@@ -199,10 +210,13 @@ private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatVi
     }
 }
 
+/** A cron run's [work], if any, is one line before its final reply, which [workShown] opens. */
 @Composable
 private fun MessageList(
     chatItems: List<ChatItem>,
-    jobPromptIndex: Int,
+    work: RunWork?,
+    workShown: Boolean,
+    onToggleWork: () -> Unit,
     parsedReplies: Map<String, State.Success>,
     viewModel: ChatViewModel,
     clock: () -> Instant,
@@ -215,11 +229,14 @@ private fun MessageList(
         contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = composerHeight + 8.dp),
         verticalArrangement = spacedBy(16.dp),
     ) {
+        if (work != null) item(key = "work") { WorkLine(work.steps, workShown, onToggleWork) }
+        val first = if (work != null && !workShown) work.end else 0
         // Items are only ever appended to a chat, so an item keeps its index.
-        items(chatItems.size, key = { it }, contentType = { chatItems[it]::class }) { index ->
+        items(chatItems.size - first, key = { first + it }, contentType = { chatItems[first + it]::class }) { offset ->
+            val index = first + offset
             when (val item = chatItems[index]) {
-                is ChatItem.User -> if (index == jobPromptIndex) JobPrompt(item.text) else UserBubble(item.text)
-                is ChatItem.Assistant -> Reply(item, parsedReplies[item.markdown])
+                is ChatItem.User -> if (work != null && index == 0) JobPrompt(item.text) else UserBubble(item.text)
+                is ChatItem.Assistant -> Reply(item.markdown, parsedReplies[item.markdown])
                 is ChatItem.Tools -> ToolLine(item.calls)
                 is ChatItem.Approval -> ApprovalCard(item, clock, onChoose = { viewModel.answerApproval(item.requestId, it) })
                 is ChatItem.Clarify -> ClarifyCard(item, onSend = { viewModel.answerClarify(item.requestId, it) })
@@ -252,10 +269,10 @@ private fun ScrollToEndButton(visible: Boolean, onClick: () -> Unit, modifier: M
  * the plain text rather than nothing.
  */
 @Composable
-private fun Reply(reply: ChatItem.Assistant, parsed: State.Success?) {
+internal fun Reply(markdown: String, parsed: State.Success?) {
     val modifier = Modifier.fillMaxWidth()
     if (parsed != null) Markdown(parsed, modifier = modifier)
-    else Markdown(reply.markdown, modifier = modifier, loading = { Text(reply.markdown, it, style = MaterialTheme.typography.bodyLarge) })
+    else Markdown(markdown, modifier = modifier, loading = { Text(markdown, it, style = MaterialTheme.typography.bodyLarge) })
 }
 
 /**
@@ -334,24 +351,30 @@ private fun UserBubble(text: String) {
     }
 }
 
-/** The prompt a cron job ran with: one muted line, and a tap shows the whole text. */
+/** The line a cron run's work before its final reply folds into; a tap shows the work or hides it again. */
+@Composable
+private fun WorkLine(steps: Int, shown: Boolean, onToggle: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onToggle).testTag("work-line"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = spacedBy(8.dp),
+    ) {
+        Icon(ScheduleIcon, contentDescription = null, Modifier.size(16.dp).testTag("work-icon"), tint = muted)
+        Text(if (steps == 1) "Show work (1 step)" else "Show work ($steps steps)", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = muted)
+        Icon(
+            if (shown) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+            contentDescription = if (shown) "Collapse" else "Expand",
+            Modifier.size(20.dp),
+            tint = muted,
+        )
+    }
+}
+
+/** The prompt a cron job ran with, in the run's work: muted and small, not a user bubble. */
 @Composable
 private fun JobPrompt(text: String) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Column(Modifier.fillMaxWidth().clickable { expanded = !expanded }.testTag("job-prompt"), verticalArrangement = spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = spacedBy(8.dp)) {
-            Icon(ScheduleIcon, contentDescription = null, Modifier.size(16.dp), tint = muted)
-            Text("Scheduled job prompt", Modifier.weight(1f), style = MaterialTheme.typography.labelLarge, color = muted)
-            Icon(
-                if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                contentDescription = if (expanded) "Collapse" else "Expand",
-                Modifier.size(20.dp),
-                tint = muted,
-            )
-        }
-        if (expanded) Text(text, style = MaterialTheme.typography.bodySmall, color = muted)
-    }
+    Text(text, Modifier.fillMaxWidth().testTag("job-prompt"), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
 private fun ToolCall.line() = listOfNotNull(name, summary?.takeIf { it.isNotBlank() }).joinToString(" · ")
@@ -384,7 +407,7 @@ private fun ToolLine(calls: List<ToolCall>) {
  * it is a card with the field above a row of actions, whose start [leading] fills.
  */
 @Composable
-private fun Composer(
+internal fun Composer(
     running: Boolean,
     canSend: Boolean,
     onSend: (String) -> Unit,

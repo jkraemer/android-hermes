@@ -14,6 +14,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasContentDescription
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -309,19 +310,31 @@ class ChatScreenTest {
         }
     }
 
+    /** A cron run that worked its way to a reply, which the user then answered. */
+    private val workTranscript = """{"session_id":"live1","stored_session_id":"stored1","messages":[
+        {"role":"user","text":"/attention-check"},
+        {"role":"assistant","text":"Let me look at the inbox."},
+        {"role":"assistant","text":""},
+        {"role":"tool","tool_call_id":"t1","name":"read_file"},
+        {"role":"tool","tool_call_id":"t2","name":"search_files"},
+        {"role":"assistant","text":"Two new mails."},
+        {"role":"user","text":"thanks"},
+        {"role":"assistant","text":"You're welcome."}
+        ],"running":false,"open_requests":[]}"""
+
     @Test
     fun cronChatCollapsesTheJobPromptAndExpandsItOnTap() {
         peer.resume = promptTranscript
         show(cron = true)
 
-        waitForText("Scheduled job prompt")
+        waitForText("Show work (1 step)")
         compose.onNodeWithText("/attention-check").assertDoesNotExist()
         compose.onNodeWithText("All quiet.").assertIsDisplayed()
 
-        compose.onNodeWithText("Scheduled job prompt").performClick()
+        compose.onNodeWithText("Show work (1 step)").performClick()
         compose.onNodeWithText("/attention-check").assertIsDisplayed()
 
-        compose.onNodeWithText("Scheduled job prompt").performClick()
+        compose.onNodeWithText("Show work (1 step)").performClick()
         compose.onNodeWithText("/attention-check").assertDoesNotExist()
     }
 
@@ -331,7 +344,7 @@ class ChatScreenTest {
         show(cron = true)
 
         waitForText("thanks")
-        compose.onAllNodesWithText("Scheduled job prompt").assertCountEquals(1)
+        compose.onAllNodesWithText("Show work", substring = true).assertCountEquals(1)
     }
 
     @Test
@@ -340,7 +353,37 @@ class ChatScreenTest {
         show()
 
         waitForText("/attention-check")
-        compose.onNodeWithText("Scheduled job prompt").assertDoesNotExist()
+        compose.onAllNodesWithText("Show work", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun cronChatFoldsEverythingBeforeTheFinalReplyIntoOneLine() {
+        peer.resume = workTranscript
+        show(cron = true)
+
+        waitForText("Show work (4 steps)")
+        compose.onNodeWithText("Two new mails.").assertIsDisplayed()
+        compose.onNodeWithText("thanks").assertIsDisplayed()
+        compose.onNodeWithText("You're welcome.").assertIsDisplayed()
+        compose.onNodeWithText("/attention-check").assertDoesNotExist()
+        compose.onNodeWithText("Let me look at the inbox.").assertDoesNotExist()
+        compose.onAllNodesWithText("read_file", substring = true).assertCountEquals(0)
+
+        compose.onNodeWithText("Show work (4 steps)").performClick()
+
+        compose.onNodeWithText("/attention-check").assertIsDisplayed()
+        compose.onNodeWithText("Let me look at the inbox.").assertIsDisplayed()
+        compose.onNodeWithText("read_file · 1 more tool").assertIsDisplayed()
+        compose.onNodeWithText("Two new mails.").assertIsDisplayed()
+    }
+
+    @Test
+    fun theWorkLineHasTheClockIcon() {
+        peer.resume = workTranscript
+        show(cron = true)
+
+        waitForText("Show work (4 steps)")
+        compose.onNode(hasTestTag("work-icon"), useUnmergedTree = true).assertExists()
     }
 
     @Test

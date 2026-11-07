@@ -428,7 +428,7 @@ class MainActivityTest {
             await(inList("Nightly"))
             compose.onNode(inList("Nightly")).performClick()
 
-            await(inChat("Scheduled job prompt"))
+            await(inChat("Show work (1 step)"))
             assertTrue(compose.onAllNodes(inChat("/attention-check")).fetchSemanticsNodes().isEmpty())
         }
     }
@@ -441,7 +441,7 @@ class MainActivityTest {
             awaitTag("chat-screen")
             openDrawerEntry("Nightly")
 
-            await(inChat("Scheduled job prompt"))
+            await(inChat("Show work (1 step)"))
             assertTrue(compose.onAllNodes(inChat("/attention-check")).fetchSemanticsNodes().isEmpty())
         }
     }
