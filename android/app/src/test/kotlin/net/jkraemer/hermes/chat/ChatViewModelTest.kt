@@ -39,7 +39,10 @@ class ChatViewModelTest {
         seenStore = SeenStore(prefs)
     }
 
-    private fun viewModel(id: String? = "stored1") = ChatViewModel(peer, id, null, needsAnswer, seenStore) { NOW }
+    private fun viewModel(id: String? = "stored1", pendingMessage: String? = null) =
+        ChatViewModel(peer, id, null, needsAnswer, seenStore, pendingMessage = pendingMessage) { NOW }
+
+    private fun submitted() = peer.calls.filter { it.first == "prompt.submit" }.map { (it.second["text"] as kotlinx.serialization.json.JsonPrimitive).content }
 
     /** Lets the view model's coroutines, which run on the main looper, catch up. */
     private fun settle() {
@@ -158,5 +161,32 @@ class ChatViewModelTest {
         settleUntil { chat.parsedReplies.value.isNotEmpty() }
 
         assertEquals(setOf("Hello"), chat.parsedReplies.value.keys)
+    }
+
+    @Test
+    fun aPendingMessageIsSentOnceTheChatIsOpen() {
+        peer.state.value = ConnectionState.Connecting
+        viewModel(pendingMessage = "What was the second mail?")
+        settle()
+        assertEquals(emptyList<String>(), submitted())
+
+        peer.state.value = ConnectionState.Ready
+        settleUntil { submitted().isNotEmpty() }
+
+        assertEquals(listOf("What was the second mail?"), submitted())
+        assertTrue(peer.calls.indexOfFirst { it.first == "session.resume" } < peer.calls.indexOfFirst { it.first == "prompt.submit" })
+    }
+
+    @Test
+    fun aPendingMessageIsSentOnlyOnceWhenTheChatOpensAgain() {
+        viewModel(pendingMessage = "hello")
+        settleUntil { submitted().isNotEmpty() }
+
+        peer.state.value = ConnectionState.Connecting
+        settle()
+        peer.state.value = ConnectionState.Ready
+        settle()
+
+        assertEquals(listOf("hello"), submitted())
     }
 }

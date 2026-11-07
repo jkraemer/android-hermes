@@ -3,7 +3,6 @@ package net.jkraemer.hermes.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mikepenz.markdown.model.State
-import com.mikepenz.markdown.model.parseMarkdownFlow
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -13,7 +12,6 @@ import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -36,7 +34,8 @@ const val NEW_CHAT_TITLE = "New chat"
 /**
  * One opened chat. [storedSessionId] null starts a new one. Opens the session once the
  * connection is ready (and again after a failed open, when it next becomes ready), and keeps
- * [needsAnswer] and [seenStore] current for the session while it lives.
+ * [needsAnswer] and [seenStore] current for the session while it lives. [pendingMessage], if
+ * any, is sent once the session is open.
  */
 class ChatViewModel(
     private val peer: RpcPeer,
@@ -45,6 +44,7 @@ class ChatViewModel(
     private val needsAnswer: MutableStateFlow<Set<String>>,
     private val seenStore: SeenStore,
     log: HermesLog = HermesLog.None,
+    private val pendingMessage: String? = null,
     private val clock: () -> Instant = Instant::now,
 ) : ViewModel() {
     // Everything this chat runs hangs off one job so close() can stop it all, the open in flight included.
@@ -68,15 +68,13 @@ class ChatViewModel(
     private val _openFailed = MutableStateFlow(false)
     val openFailed: StateFlow<Boolean> = _openFailed.asStateFlow()
 
-    /**
-     * Each finished reply's parsed Markdown, by its text: parsed once, off the main thread, and kept for the
-     * life of the chat, so a reply that scrolls back into view is laid out at its full height straight away.
-     */
-    private val _parsedReplies = MutableStateFlow<Map<String, State.Success>>(emptyMap())
-    val parsedReplies: StateFlow<Map<String, State.Success>> = _parsedReplies.asStateFlow()
+    private val markdown = ParsedMarkdown(scope)
 
-    /** The replies whose parse has been started. */
-    private val parsing = mutableSetOf<String>()
+    /** Each finished reply's parsed Markdown, by its text, kept for the life of the chat. */
+    val parsedReplies: StateFlow<Map<String, State.Success>> = markdown.parsed
+
+    /** Whether [pendingMessage] has been sent. */
+    private var pendingSent = false
 
     private var opened = false
 
@@ -118,6 +116,10 @@ class ChatViewModel(
             opened = true
         }
         _openFailed.value = !opened
+        if (opened && !pendingSent && pendingMessage != null) {
+            pendingSent = true
+            send(pendingMessage)
+        }
     }
 
     fun retryOpen() {
@@ -136,13 +138,7 @@ class ChatViewModel(
 
     /** A streaming reply changes with every delta, so only finished ones are parsed. */
     private fun parseFinishedReplies(items: List<ChatItem>) {
-        for (item in items) {
-            if (item !is ChatItem.Assistant || item.streaming || !parsing.add(item.markdown)) continue
-            scope.launch {
-                val parsed = parseMarkdownFlow(item.markdown).first { it !is State.Loading }
-                if (parsed is State.Success) _parsedReplies.update { it + (item.markdown to parsed) }
-            }
-        }
+        for (item in items) if (item is ChatItem.Assistant && !item.streaming) markdown.parse(item.markdown)
     }
 
     /** `session.title` names the session by its stored id; `session.info` carries it as `title` next to `stored_session_id`. */
