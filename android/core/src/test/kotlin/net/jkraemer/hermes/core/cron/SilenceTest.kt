@@ -3,6 +3,7 @@ package net.jkraemer.hermes.core.cron
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** The cases of Hermes' tests/gateway/test_response_filters.py and tests/cron/test_scheduler.py (TestSilentDelivery). */
 class SilenceTest {
@@ -77,5 +78,25 @@ class SilenceTest {
     fun aMarkerInMoreThan64CharactersOfPunctuationIsNotSilent() {
         assertSilent("*".repeat(29) + "SILENT" + "*".repeat(29))
         assertNotSilent("*".repeat(30) + "SILENT" + "*".repeat(30))
+    }
+
+    @Test
+    fun whitespaceInsideAMarkerIsWhatPythonsSplitTakesForWhitespace() {
+        // str.split() also splits at the information separators U+001C..U+001F and at U+0085.
+        assertSilent("NO\u001CREPLY")
+        assertSilent("NO\u001FREPLY")
+        assertSilent("NO\u0085REPLY")
+        assertSilent("NO\u00A0REPLY")
+        assertSilent("NO\u3000REPLY")
+        assertNotSilent("NO\u200BREPLY") // zero-width space is not whitespace to Python
+    }
+
+    @Test
+    fun appCodeUsesNoRegexFlagThatAndroidCannotCompile() {
+        // Android's ICU regex engine rejects (?U) / UNICODE_CHARACTER_CLASS, which the JVM these tests run on
+        // accepts: v0.2.0 crashed at start on a phone while every test passed.
+        val sources = listOf("../core/src/main", "../app/src/main").map(::File).flatMap { it.walkTopDown().filter { f -> f.extension == "kt" }.toList() }
+        val offenders = sources.filter { f -> f.readText().let { "(?U)" in it || "UNICODE_CHARACTER_CLASS" in it } }.map { it.path }
+        assertTrue("regex flags Android cannot compile in $offenders", sources.isNotEmpty() && offenders.isEmpty())
     }
 }

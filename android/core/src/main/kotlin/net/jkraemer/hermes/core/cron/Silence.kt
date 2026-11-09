@@ -40,11 +40,27 @@ private fun isMarker(text: String): Boolean {
     return listOf(stripped, depunctuated).any { canonical(it) in SILENCE_MARKERS }
 }
 
-private val WHITESPACE_RUN = Regex("(?U)\\s+")
+/**
+ * What Python's `str.split()` splits at: Kotlin's whitespace (which covers U+001C..U+001F and the space separators)
+ * plus NEL. Deliberately not a regex: Android's ICU engine rejects the Unicode-character-class flag that
+ * a whitespace pattern would need, and compiling one crashed the app on a phone.
+ */
+private fun Char.isPythonWhitespace() = isWhitespace() || this == '\u0085'
 
 /** Upper case, with every run of whitespace one space. */
 private fun canonical(text: String): String =
-    text.trim().uppercase().split(WHITESPACE_RUN).filter { it.isNotEmpty() }.joinToString(" ")
+    text.uppercase().split { it.isPythonWhitespace() }.filter { it.isNotEmpty() }.joinToString(" ")
+
+private fun String.split(isSeparator: (Char) -> Boolean): List<String> {
+    val parts = mutableListOf<String>()
+    var start = 0
+    for (i in indices) if (isSeparator(this[i])) {
+        parts += substring(start, i)
+        start = i + 1
+    }
+    parts += substring(start)
+    return parts
+}
 
 /** Square brackets stay, so a malformed `[SILENT` cannot become `SILENT`. */
 private fun isEdgePunctuation(codePoint: Int) =
