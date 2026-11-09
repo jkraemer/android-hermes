@@ -4,6 +4,12 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-09
+
+### Fixed
+
+- The app no longer crashes at start when the list shows cron jobs.
+
 ## [0.2.0] - 2026-11-07
 
 ### Added
