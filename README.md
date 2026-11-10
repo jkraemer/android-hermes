@@ -18,6 +18,13 @@ like the Claude Android app: open it and start typing.
 
 Tested against Hermes Agent v0.23.0.
 
+## Notifications
+
+Notifications for cron job reports, approvals, questions and finished replies
+need the `hermes-app` plugin on your Hermes server and the
+[ntfy](https://ntfy.sh) app on the phone. Pushes are end-to-end encrypted. See
+[server/README.md](server/README.md) for installing the plugin.
+
 ## Install
 
 Releases on this repository carry a signed APK. With
