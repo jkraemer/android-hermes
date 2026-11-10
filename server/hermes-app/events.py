@@ -1,25 +1,10 @@
 """The JSON the plugin pushes to the app, and the judgement of which cron replies are worth one."""
 
-import importlib.util
 import json
-import sys
 import unicodedata
-from pathlib import Path
 
-
-def _sibling(name: str):
-    """Load a module of this directory by file path, so it works both inside the plugin package and when
-    plugin_api.py is imported standalone by the dashboard (where relative imports do not exist)."""
-    module_name = f"hermes_app_{name}"
-    if module_name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(module_name, Path(__file__).with_name(f"{name}.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-    return sys.modules[module_name]
-
-
-_MAX_PLAINTEXT = _sibling("webpush").MAX_PLAINTEXT
+# What fits one WebPush record (webpush.MAX_PLAINTEXT, pinned equal by a test).
+MAX_PLAINTEXT = 3993
 _ELLIPSIS = "…"
 
 
@@ -32,9 +17,9 @@ def event_json(type: str, **fields) -> bytes:
     payload = {"v": 1, "type": type, **{k: v for k, v in fields.items() if v is not None}}
     encoded = _dump(payload)
     text = payload.get("text")
-    if len(encoded) <= _MAX_PLAINTEXT or text is None:
+    if len(encoded) <= MAX_PLAINTEXT or text is None:
         return encoded
-    overflow = len(encoded) - _MAX_PLAINTEXT
+    overflow = len(encoded) - MAX_PLAINTEXT
     # Bytes of text to keep, leaving room for the ellipsis. Cutting a character can only free more than asked.
     keep = max(len(text.encode("utf-8")) - overflow - len(_ELLIPSIS.encode("utf-8")), 0)
     cut = text.encode("utf-8")[:keep].decode("utf-8", errors="ignore")

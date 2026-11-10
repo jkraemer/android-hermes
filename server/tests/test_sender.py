@@ -9,7 +9,7 @@ from http_ece import decrypt
 from events import event_json
 from sender import Sender
 from store import Store, Subscription
-from webpush import b64url_decode
+from webpush import encrypt
 
 ENDPOINT = "https://ntfy.example/secret-topic"
 
@@ -53,7 +53,7 @@ class Recorder:
 
 
 def sender_with(store, post):
-    return Sender(lambda: store, post)
+    return Sender(lambda: store, encrypt, post)
 
 
 def test_posts_ciphertext_the_app_can_decrypt(store, key_and_sub):

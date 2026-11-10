@@ -9,24 +9,28 @@ from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 
-def _sibling(name: str):
-    """Load a module of the plugin directory by file path. The dashboard imports this file standalone, outside
-    the plugin package, so neither relative nor package imports work; the modules load under fixed names
-    and import each other the same way."""
-    module_name = f"hermes_app_{name}"
-    if module_name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(module_name, Path(__file__).resolve().parent.parent / f"{name}.py")
+def _load_siblings():
+    """Bootstrap the shared module loader by path (the dashboard imports this file standalone)."""
+    name = "hermes_app__siblings"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parent.parent / "_siblings.py")
         module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-    return sys.modules[module_name]
+        sys.modules[name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(name, None)
+            raise
+    return sys.modules[name]
 
 
-_store, _events, _sender = _sibling("store"), _sibling("events"), _sibling("sender")
+_siblings = _load_siblings()
+_store, _events = _siblings.load("store"), _siblings.load("events")
+_sender = _siblings.load("sender")
 
 # Replaced by tests.
 store_factory = _store.default_store
-sender_factory = _sender.shared_sender
+sender_factory = _siblings.shared_sender
 
 router = APIRouter()
 

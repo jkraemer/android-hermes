@@ -2,8 +2,12 @@ import json
 
 import pytest
 
-from events import event_json, is_failure, is_silent
+from events import MAX_PLAINTEXT as EVENT_LIMIT, event_json, is_failure, is_silent
 from webpush import MAX_PLAINTEXT
+
+
+def test_event_limit_is_the_webpush_record_capacity():
+    assert EVENT_LIMIT == MAX_PLAINTEXT
 
 
 def test_cron_event_shape():

@@ -3,34 +3,17 @@
 Nothing here logs an endpoint or an event's text, only the event type and the HTTP status.
 """
 
-import importlib.util
 import json
 import logging
 import queue
-import sys
 import threading
 import time
 from collections.abc import Callable
-from pathlib import Path
 
 import httpx
 
 log = logging.getLogger("hermes-app.push")
 
-
-def _sibling(name: str):
-    """Load a module of this directory by file path, so it works both inside the plugin package and when
-    plugin_api.py is imported standalone by the dashboard (where relative imports do not exist)."""
-    module_name = f"hermes_app_{name}"
-    if module_name not in sys.modules:
-        spec = importlib.util.spec_from_file_location(module_name, Path(__file__).with_name(f"{name}.py"))
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-        spec.loader.exec_module(module)
-    return sys.modules[module_name]
-
-
-_webpush = _sibling("webpush")
 
 QUEUE_SIZE = 100
 TIMEOUT_SECONDS = 10
@@ -42,8 +25,9 @@ def httpx_post(url: str, body: bytes, headers: dict) -> int:
 
 
 class Sender:
-    def __init__(self, store_factory: Callable, post: Callable[[str, bytes, dict], int] = httpx_post):
+    def __init__(self, store_factory: Callable, encrypt: Callable[[bytes, str, str], bytes], post: Callable[[str, bytes, dict], int] = httpx_post):
         self._store_factory = store_factory
+        self._encrypt = encrypt
         self._post = post
         self._queue: queue.Queue[bytes] = queue.Queue(QUEUE_SIZE)
         self._start_lock = threading.Lock()
@@ -84,21 +68,8 @@ class Sender:
         if subscription is None:
             return
         event_type = json.loads(event).get("type")
-        body = _webpush.encrypt(event, subscription.p256dh, subscription.auth)
+        body = self._encrypt(event, subscription.p256dh, subscription.auth)
         status = self._post(subscription.endpoint, body, dict(HEADERS))
         log.info("push %s: HTTP %s", event_type, status)
         if status in (404, 410):
             store.clear_subscription()
-
-
-_shared: Sender | None = None
-_shared_lock = threading.Lock()
-
-
-def shared_sender() -> Sender:
-    """The process's one sender, on the default store."""
-    global _shared
-    with _shared_lock:
-        if _shared is None:
-            _shared = Sender(lambda: _sibling("store").default_store())
-        return _shared
