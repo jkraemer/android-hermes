@@ -126,9 +126,9 @@ private suspend fun ChatController.directive(result: JsonObject, command: SlashC
         }
         "send" -> {
             result.text("notice")?.let { show(ChatItem.Notice(it)) }
-            message?.let { submitShown(it) }
+            message?.let { submitShown(it, shownAs = result.shown() ?: it) }
         }
-        "skill" -> message?.let { submitShown(it, shownAs = result.text("display") ?: command.name, displayKind = SKILL_DISPLAY_KIND) }
+        "skill" -> message?.let { submitShown(it, shownAs = result.shown() ?: "${command.name} ${command.arg}".trim(), displayKind = SKILL_DISPLAY_KIND) }
         "prefill" -> return CommandOutcome.Prefill(message.orEmpty())
         else -> {
             result.text("output")?.let { show(ChatItem.Notice(it)) }
@@ -149,5 +149,8 @@ private suspend fun ChatController.submitShown(text: String, shownAs: String = t
 }
 
 private fun ChatController.show(item: ChatItem) = feed(ChatInput.ItemAdded(item))
+
+/** What the chat shows for the message a directive sends: Hermes' `display`, never the message itself when it has one. */
+private fun JsonObject.shown(): String? = text("display")?.takeIf { it.isNotBlank() }
 
 private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull

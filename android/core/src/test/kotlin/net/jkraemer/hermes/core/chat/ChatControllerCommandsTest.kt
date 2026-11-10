@@ -167,6 +167,29 @@ class ChatControllerCommandsTest {
     }
 
     @Test
+    fun sendDirectiveShowsItsDisplayInsteadOfTheMessage() = test { peer, chat ->
+        peer.on("slash.exec", """{"type":"send","message":"LONG PROMPT","display":"/context"}""")
+        chat.run("/context")
+        assertEquals(listOf(ChatItem.User("/context")), chat.items())
+        assertEquals(obj("""{"session_id":"live1","text":"LONG PROMPT"}"""), peer.calls.last().second)
+    }
+
+    @Test
+    fun blankSendDisplayFallsBackToTheMessage() = test { peer, chat ->
+        peer.on("slash.exec", """{"type":"send","message":"m","display":"  "}""")
+        chat.run("/context")
+        assertEquals(listOf(ChatItem.User("m")), chat.items())
+    }
+
+    @Test
+    fun blankSkillDisplayFallsBackToTheTypedCommand() = test { peer, chat ->
+        peer.on("slash.exec", refused(4018, "skill command"))
+        peer.on("command.dispatch", """{"type":"skill","message":"LONG SKILL PROMPT","display":" ","name":"arxiv"}""")
+        chat.run("/arxiv llm agents")
+        assertEquals(listOf(ChatItem.User("/arxiv llm agents", displayKind = "skill_invocation")), chat.items())
+    }
+
+    @Test
     fun aliasIsFollowed() = test { peer, chat ->
         peer.on("slash.exec") { params ->
             if ((params["command"] as kotlinx.serialization.json.JsonPrimitive).content == "context please") obj("""{"type":"alias","target":"compress"}""")
