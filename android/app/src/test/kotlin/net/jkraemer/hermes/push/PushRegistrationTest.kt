@@ -58,6 +58,28 @@ class PushRegistrationTest {
     private fun awaitStatus(expected: PushStatus) = runBlocking { withTimeout(10_000) { registration.status.first { it == expected } } }
 
     @Test
+    fun statusIsRegisteringBeforeStart() {
+        assertEquals(PushStatus.Registering, registration.status.value)
+    }
+
+    @Test
+    fun aFoundDistributorThatNeverAnswersStaysRegistering() {
+        registration.start(activity)
+        Thread.sleep(200)
+
+        assertEquals(PushStatus.Registering, registration.status.value)
+    }
+
+    @Test
+    fun notificationPermissionWinsOverRegistering() {
+        permitted = false
+
+        registration.start(activity)
+
+        assertEquals(PushStatus.NeedsPermission, registration.status.value)
+    }
+
+    @Test
     fun startRegistersWithTheCurrentOrDefaultDistributor() {
         registration.start(activity)
 

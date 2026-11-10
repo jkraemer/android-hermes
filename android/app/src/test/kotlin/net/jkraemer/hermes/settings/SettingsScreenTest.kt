@@ -42,6 +42,17 @@ class SettingsScreenTest {
 
     @Test fun onStatus() = supporting(PushStatus.On, "On")
 
+    @Test fun registeringStatus() = supporting(PushStatus.Registering, "Setting up…")
+
+    @Test
+    fun tappingTheRegisteringRowDoesNothing() {
+        show(PushStatus.Registering)
+
+        compose.onNodeWithText("Notifications").performClick()
+
+        assertEquals(0, retries)
+    }
+
     @Test fun needsPermissionStatus() = supporting(PushStatus.NeedsPermission, "Allow notifications")
 
     @Test fun noDistributorStatus() = supporting(PushStatus.NoDistributor, "Install ntfy to get notifications")
@@ -72,6 +83,8 @@ class SettingsScreenTest {
         show(status)
         compose.onNodeWithText("Send test notification").assertDoesNotExist()
     }
+
+    @Test fun noTestRowWhileRegistering() = noTestRow(PushStatus.Registering)
 
     @Test fun noTestRowWhenNeedingPermission() = noTestRow(PushStatus.NeedsPermission)
 

@@ -14,6 +14,9 @@ import net.jkraemer.hermes.core.push.PushApi
 sealed interface PushStatus {
     data object On : PushStatus
 
+    /** Waiting for the distributor to deliver an endpoint, and for the server to take it. */
+    data object Registering : PushStatus
+
     /** Registered, but notifications are not allowed, so nothing would be shown. */
     data object NeedsPermission : PushStatus
 
@@ -48,14 +51,15 @@ class PushRegistration(
     private val scope: CoroutineScope,
 ) {
     private sealed interface Outcome {
+        data object Registering : Outcome
         data object Registered : Outcome
         data object NoDistributor : Outcome
         data object PluginMissing : Outcome
         data class Failed(val message: String) : Outcome
     }
 
-    private var outcome: Outcome = Outcome.NoDistributor
-    private val _status = MutableStateFlow<PushStatus>(PushStatus.NoDistributor)
+    private var outcome: Outcome = Outcome.Registering
+    private val _status = MutableStateFlow<PushStatus>(if (notificationsAllowed()) PushStatus.Registering else PushStatus.NeedsPermission)
     val status: StateFlow<PushStatus> = _status
 
     /** Registers again; the distributor may have changed or forgotten the registration since the last start. */
@@ -64,11 +68,23 @@ class PushRegistration(
     fun pickDistributor(activity: Activity) = distributor.pick(activity) { register(activity, it) }
 
     private fun register(context: Context, found: Boolean) {
-        if (found) distributor.register(context, MESSAGE_FOR_DISTRIBUTOR) else update(Outcome.NoDistributor)
+        if (found) {
+            // A registration that is already through stays shown as such; the distributor answers again only if something changed.
+            markRegistering()
+            distributor.register(context, MESSAGE_FOR_DISTRIBUTOR)
+        } else {
+            update(Outcome.NoDistributor)
+        }
     }
 
     /** The system's notification permission may have changed. */
+    @Synchronized
     fun permissionChanged() = update(outcome)
+
+    @Synchronized
+    private fun markRegistering() {
+        if (outcome != Outcome.Registered) update(Outcome.Registering)
+    }
 
     fun onEndpoint(url: String, p256dh: String, auth: String) {
         scope.launch {
@@ -109,6 +125,7 @@ class PushRegistration(
             Outcome.NoDistributor -> PushStatus.NoDistributor
             Outcome.PluginMissing -> PushStatus.PluginMissing
             is Outcome.Failed -> PushStatus.Failed(new.message)
+            Outcome.Registering -> if (notificationsAllowed()) PushStatus.Registering else PushStatus.NeedsPermission
             Outcome.Registered -> if (notificationsAllowed()) PushStatus.On else PushStatus.NeedsPermission
         }
     }

@@ -65,7 +65,11 @@ fun SettingsScreen(
                 headlineContent = { Text("Notifications") },
                 supportingContent = { Text(push.describe()) },
                 modifier = Modifier.clickable {
-                    if (push == PushStatus.NeedsPermission) permission.launch(Manifest.permission.POST_NOTIFICATIONS) else onRetryPush()
+                    when (push) {
+                        PushStatus.NeedsPermission -> permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        PushStatus.Registering -> Unit
+                        else -> onRetryPush()
+                    }
                 },
             )
             if (push == PushStatus.On) {
@@ -89,6 +93,7 @@ fun SettingsScreen(
 }
 
 private fun PushStatus.describe() = when (this) {
+    PushStatus.Registering -> "Setting up…"
     PushStatus.On -> "On"
     PushStatus.NeedsPermission -> "Allow notifications"
     PushStatus.NoDistributor -> "Install ntfy to get notifications"
