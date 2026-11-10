@@ -20,5 +20,9 @@ object E2eEnv {
     val home: String get() = value("HERMES_HOME")
     val cli: String get() = value("HERMES_BIN")
 
+    /** The ntfy server the hermes-app plugin pushes to, as the host sees it and as the Hermes container does. */
+    val ntfyUrl: String get() = value("NTFY_URL")
+    val ntfyUrlFromHermes: String get() = value("NTFY_URL_FROM_HERMES")
+
     private fun value(key: String) = requireNotNull(values[key]) { "$key missing from the e2e environment file" }
 }

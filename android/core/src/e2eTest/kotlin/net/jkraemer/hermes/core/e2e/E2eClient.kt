@@ -12,6 +12,7 @@ import net.jkraemer.hermes.core.auth.LoginResult
 import net.jkraemer.hermes.core.auth.PersistentCookieJar
 import net.jkraemer.hermes.core.chat.ChatController
 import net.jkraemer.hermes.core.cron.CronApi
+import net.jkraemer.hermes.core.push.PushApi
 import net.jkraemer.hermes.core.rpc.RpcConnection
 import net.jkraemer.hermes.core.sessions.SessionsApi
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -52,6 +53,7 @@ class E2eClient private constructor(cookieFile: File) : AutoCloseable {
     val rpc = RpcConnection(httpClient, baseUrl, auth::mintWsTicket, scope)
     val sessions = SessionsApi(baseUrl, httpClient)
     val cron = CronApi(baseUrl, httpClient)
+    val push = PushApi(baseUrl, httpClient)
 
     /**
      * A REST call the app itself does not make, e.g. to set up a cron job; it may take as long as a model turn.

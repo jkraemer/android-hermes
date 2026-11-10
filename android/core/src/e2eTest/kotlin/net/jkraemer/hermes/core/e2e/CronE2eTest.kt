@@ -3,12 +3,9 @@ package net.jkraemer.hermes.core.e2e
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.put
-import net.jkraemer.hermes.core.cron.CronRun
 import net.jkraemer.hermes.core.cron.FinalReplies
 import net.jkraemer.hermes.core.cron.feedEntries
 import net.jkraemer.hermes.core.cron.isSilent
@@ -19,7 +16,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import java.util.UUID
 
 class CronE2eTest {
     @get:Rule
@@ -30,39 +26,21 @@ class CronE2eTest {
 
     @After
     fun tearDown(): Unit = runBlocking {
-        client?.let { app -> createdJobs.forEach { runCatching { app.rest("DELETE", "api/cron/jobs/$it") } } }
+        client?.deleteCronJobs(createdJobs)
         client?.close()
     }
 
     private suspend fun connect(): E2eClient = E2eClient.connect(folder.newFile()).also { client = it }
 
     /** Creates a daily job that runs [prompt] and returns its id; the test deletes it afterwards. */
-    private suspend fun E2eClient.createJob(name: String, prompt: String): String {
-        val body = buildJsonObject {
-            put("name", name)
-            put("schedule", "every 1d")
-            put("prompt", prompt)
-            put("deliver", "local")
-        }.toString()
-        return Json.parseToJsonElement(rest("POST", "api/cron/jobs", body)).jsonObject.getValue("id").jsonPrimitive.content
-            .also { createdJobs += it }
-    }
-
-    /** Runs the job now; Hermes answers once the run has finished. Returns the job's one run. */
-    private suspend fun E2eClient.runOnce(jobId: String): CronRun {
-        rest("POST", "api/cron/jobs/$jobId/trigger")
-        val runs = cron.runs(jobId).runs
-        assertEquals("runs of $jobId: $runs", 1, runs.size)
-        return runs.single()
-    }
-
-    private fun uniqueName(prefix: String) = prefix + "-" + UUID.randomUUID().toString().take(8)
+    private suspend fun E2eClient.createJob(name: String, prompt: String): String =
+        createCronJob(name, prompt).also { createdJobs += it }
 
     @Test
     fun aRunThatHadNothingToReportEndsSilent() = runBlocking {
         val app = connect()
         val name = uniqueName("e2e-silent")
-        val job = app.createJob(name, "There is never anything new to report. Respond with exactly [SILENT]")
+        val job = app.createJob(name, SILENT_JOB_PROMPT)
 
         assertTrue("job $job not listed: ${app.cron.jobs()}", app.cron.jobs().any { it.id == job && it.name == name })
         val run = app.runOnce(job)
@@ -78,7 +56,7 @@ class CronE2eTest {
         val app = connect()
         val job = app.createJob(
             uniqueName("e2e-report"),
-            "This run always has news to report. Your report is the single word cron-ok, so your final response must be exactly: cron-ok",
+            REPORTING_JOB_PROMPT,
         )
 
         val run = app.runOnce(job)
@@ -92,7 +70,7 @@ class CronE2eTest {
     @Test
     fun archivingARunMarksItArchivedInTheJobsRuns() = runBlocking {
         val app = connect()
-        val job = app.createJob(uniqueName("e2e-archive"), "There is never anything new to report. Respond with exactly [SILENT]")
+        val job = app.createJob(uniqueName("e2e-archive"), SILENT_JOB_PROMPT)
         val run = app.runOnce(job)
 
         app.sessions.update(run.sessionId, archived = true)
@@ -109,7 +87,7 @@ class CronE2eTest {
         val app = connect()
         val job = app.createJob(
             uniqueName("e2e-reply"),
-            "This run always has news to report. Your report is the single word cron-ok, so your final response must be exactly: cron-ok",
+            REPORTING_JOB_PROMPT,
         )
         val run = app.runOnce(job)
 
@@ -132,7 +110,7 @@ class CronE2eTest {
         val app = connect()
         val job = app.createJob(
             uniqueName("e2e-tools"),
-            "This run always has news to report. Your report is the single word cron-ok, so your final response must be exactly: cron-ok",
+            REPORTING_JOB_PROMPT,
         )
         val run = app.runOnce(job)
         val chat = app.newChat()

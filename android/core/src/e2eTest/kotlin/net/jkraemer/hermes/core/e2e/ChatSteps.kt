@@ -2,9 +2,12 @@ package net.jkraemer.hermes.core.e2e
 
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
+import net.jkraemer.hermes.core.chat.ApprovalChoice
 import net.jkraemer.hermes.core.chat.ChatController
 import net.jkraemer.hermes.core.chat.ChatItem
 import net.jkraemer.hermes.core.chat.ChatState
+import org.junit.Assert.fail
+import java.io.File
 
 const val MODEL_TIMEOUT_MS = 120_000L
 
@@ -50,4 +53,30 @@ fun failMisstep(chat: ChatController): Nothing {
 fun failTurnNotEnded(chat: ChatController): Nothing {
     chat.failIfTurnErrored()
     throw AssertionError("turn did not end after answering (protocol problem?): ${chat.state.value.lastAgentOutput()}")
+}
+
+fun ChatState.approval(): ChatItem.Approval? = items.filterIsInstance<ChatItem.Approval>().firstOrNull()
+fun ChatState.clarify(): ChatItem.Clarify? = items.filterIsInstance<ChatItem.Clarify>().firstOrNull()
+
+/** Asks the agent to remove [directory], a command that needs approval; waits for its card and returns the command and the card. */
+suspend fun ChatController.requestRemoval(directory: File): Pair<String, ChatItem.Approval> {
+    val command = "rm -rf ${directory.path}"
+    send("Use the terminal tool to run exactly this command and nothing else: $command")
+    val card = awaitState { it.approval() != null }?.approval() ?: failMisstep(this)
+    return command to card
+}
+
+/** Answers anything but DENY only when the card is for exactly the [requested] command. */
+suspend fun ChatController.answerGuarded(requested: String, card: ChatItem.Approval, choice: ApprovalChoice) {
+    if (choice != ApprovalChoice.DENY && card.command.trim() != requested) {
+        answerApproval(card.requestId, ApprovalChoice.DENY)
+        fail("agent requested a different command (model misstep): ${card.command}")
+    }
+    answerApproval(card.requestId, choice)
+}
+
+/** Asks the agent to let the user choose between red and blue with the clarify tool; waits for its card. */
+suspend fun ChatController.requestColourChoice(): ChatItem.Clarify {
+    send("Before doing anything, use the clarify tool to ask me to choose between the options red and blue, then reply with the colour I chose.")
+    return awaitState { it.clarify() != null }?.clarify() ?: failMisstep(this)
 }

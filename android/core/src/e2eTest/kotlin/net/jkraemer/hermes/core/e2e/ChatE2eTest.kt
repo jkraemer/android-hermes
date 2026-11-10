@@ -4,13 +4,10 @@ import kotlinx.coroutines.runBlocking
 import net.jkraemer.hermes.core.chat.ApprovalChoice
 import net.jkraemer.hermes.core.chat.CardStatus
 import net.jkraemer.hermes.core.chat.ChatController
-import net.jkraemer.hermes.core.chat.ChatItem
-import net.jkraemer.hermes.core.chat.ChatState
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -42,26 +39,6 @@ class ChatE2eTest {
             createdDirs += it
         }
 
-    private fun ChatState.approval(): ChatItem.Approval? = items.filterIsInstance<ChatItem.Approval>().firstOrNull()
-    private fun ChatState.clarify(): ChatItem.Clarify? = items.filterIsInstance<ChatItem.Clarify>().firstOrNull()
-
-    /** Waits for the approval card of a request to run [command] and returns it. */
-    private suspend fun requestRemoval(chat: ChatController, directory: File): Pair<String, ChatItem.Approval> {
-        val command = "rm -rf ${directory.path}"
-        chat.send("Use the terminal tool to run exactly this command and nothing else: $command")
-        val card = chat.awaitState { it.approval() != null }?.approval() ?: failMisstep(chat)
-        return command to card
-    }
-
-    /** Answers anything but DENY only when the card is for exactly the requested command. */
-    private suspend fun answerGuarded(chat: ChatController, requested: String, card: ChatItem.Approval, choice: ApprovalChoice) {
-        if (choice != ApprovalChoice.DENY && card.command.trim() != requested) {
-            chat.answerApproval(card.requestId, ApprovalChoice.DENY)
-            fail("agent requested a different command (model misstep): ${card.command}")
-        }
-        chat.answerApproval(card.requestId, choice)
-    }
-
     @Test
     fun replyStreamsAndCompletes() = runBlocking {
         val chat = newChat()
@@ -74,9 +51,9 @@ class ChatE2eTest {
     fun approvalRoundTrip() = runBlocking {
         val chat = newChat()
         val directory = freshDirectory()
-        val (command, card) = requestRemoval(chat, directory)
+        val (command, card) = chat.requestRemoval(directory)
 
-        answerGuarded(chat, command, card, ApprovalChoice.DENY)
+        chat.answerGuarded(command, card, ApprovalChoice.DENY)
 
         val answered = chat.state.value.approval()!!
         assertEquals(CardStatus.Answered("Denied"), answered.status)
@@ -88,9 +65,9 @@ class ChatE2eTest {
     fun approvalAllowOnceRuns() = runBlocking {
         val chat = newChat()
         val directory = freshDirectory()
-        val (command, card) = requestRemoval(chat, directory)
+        val (command, card) = chat.requestRemoval(directory)
 
-        answerGuarded(chat, command, card, ApprovalChoice.ONCE)
+        chat.answerGuarded(command, card, ApprovalChoice.ONCE)
 
         assertEquals(CardStatus.Answered("Allowed once"), chat.state.value.approval()!!.status)
         chat.awaitState { !it.running } ?: failTurnNotEnded(chat)
@@ -100,8 +77,7 @@ class ChatE2eTest {
     @Test
     fun clarifyRoundTrip() = runBlocking {
         val chat = newChat()
-        chat.send("Before doing anything, use the clarify tool to ask me to choose between the options red and blue, then reply with the colour I chose.")
-        val card = chat.awaitState { it.clarify() != null }?.clarify() ?: failMisstep(chat)
+        val card = chat.requestColourChoice()
 
         chat.answerClarify(card.requestId, mapOf(card.questions.first().qid to listOf("red")))
 

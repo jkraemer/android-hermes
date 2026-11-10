@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Disposable Hermes Agent for end-to-end tests.
-#   hermes-e2e.sh up    check out, build the image (once), configure, start the container, write the env file
-#   hermes-e2e.sh down  stop the container
+#   hermes-e2e.sh up    check out, build the image (once), configure, install the hermes-app plugin,
+#                       start the Hermes and ntfy containers, write the env file
+#   hermes-e2e.sh down  stop the containers
 #   hermes-e2e.sh env   print the env file path
 # Model credentials come from E2E_PROVIDER, E2E_MODEL and E2E_API_KEY.
 set -euo pipefail
@@ -15,10 +16,16 @@ REPO_URL="https://github.com/NousResearch/hermes-agent"
 PORT=19119
 USERNAME=e2e
 CONTAINER=hermes-e2e
+# A local ntfy that the hermes-app plugin pushes to: Hermes reaches it by name on a shared
+# network, the host (where the tests poll it) through a loopback port.
+NETWORK=hermes-e2e
+NTFY_CONTAINER=hermes-e2e-ntfy
+NTFY_IMAGE=docker.io/binwiederhier/ntfy:v2.34.0
+NTFY_PORT=19120
 
 die() { echo "hermes-e2e: $*" >&2; exit 1; }
 
-container_running() { [[ "$(podman inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null)" == true ]]; }
+container_running() { [[ "$(podman inspect -f '{{.State.Running}}' "${1:-$CONTAINER}" 2>/dev/null)" == true ]]; }
 
 # A random value generated on first use and kept, so repeated `up` runs agree.
 persistent_secret() {
@@ -66,6 +73,8 @@ dashboard:
     username: $USERNAME
     password: "$(persistent_secret password)"
     secret: "$(persistent_secret signing-secret)"
+plugins:
+  enabled: [hermes-app]
 YAML
   chmod 600 "$HOME_DIR/config.yaml"
 }
@@ -80,6 +89,35 @@ add_model_key() {
     || die "could not add the $E2E_PROVIDER key (is E2E_PROVIDER a provider id that takes an API key?)"
 }
 
+# Hermes loads plugins when its processes start, so this runs before the container starts.
+install_plugin() {
+  "$E2E_DIR/../server/install.sh" "$HOME_DIR" > /dev/null || die "could not install the hermes-app plugin"
+}
+
+ensure_network() {
+  podman network exists "$NETWORK" || podman network create "$NETWORK" > /dev/null
+}
+
+# Tests poll ntfy about once a second, which its per-visitor request limit would soon refuse;
+# this ntfy only serves the tests, so no visitor is limited.
+start_ntfy() {
+  if container_running "$NTFY_CONTAINER"; then echo "$NTFY_CONTAINER already running"; return; fi
+  podman run -d --rm --name "$NTFY_CONTAINER" --network "$NETWORK" \
+    -p "127.0.0.1:$NTFY_PORT:80" \
+    -e NTFY_VISITOR_REQUEST_LIMIT_EXEMPT_HOSTS=0.0.0.0/0 \
+    "$NTFY_IMAGE" serve > /dev/null
+}
+
+wait_for_ntfy() {
+  local url="http://127.0.0.1:$NTFY_PORT/v1/health"
+  for _ in $(seq 1 30); do
+    container_running "$NTFY_CONTAINER" || die "ntfy exited, see: podman logs $NTFY_CONTAINER"
+    if curl -fsS -o /dev/null "$url" 2>/dev/null; then return; fi
+    sleep 1
+  done
+  die "ntfy did not answer $url within 30 s"
+}
+
 write_env_file() {
   cat > "$ENV_FILE" <<ENV
 HERMES_URL=http://127.0.0.1:$PORT
@@ -87,6 +125,8 @@ HERMES_USER=$USERNAME
 HERMES_PASSWORD=$(persistent_secret password)
 HERMES_HOME=$HOME_DIR
 HERMES_BIN=$E2E_DIR/hermes-cli
+NTFY_URL=http://127.0.0.1:$NTFY_PORT
+NTFY_URL_FROM_HERMES=http://$NTFY_CONTAINER
 ENV
   chmod 600 "$ENV_FILE"
 }
@@ -100,7 +140,7 @@ start_container() {
   # the agent writes to HERMES_HOME belong to the host user; --user root keeps the
   # image's root bootstrap working.
   # :Z relabels the home directory for SELinux, which would otherwise deny writes.
-  podman run -d --rm --name "$CONTAINER" \
+  podman run -d --rm --name "$CONTAINER" --network "$NETWORK" \
     --userns=keep-id:uid=10000,gid=10000 --user root \
     -p "127.0.0.1:$PORT:$PORT" \
     -v "$HOME_DIR:$HOME_DIR:Z" -e "HERMES_HOME=$HOME_DIR" \
@@ -129,6 +169,10 @@ up() {
   IMAGE="hermes-e2e:$(cat "$STATE/src-ref")"
   build_image
   write_config
+  install_plugin
+  ensure_network
+  start_ntfy
+  wait_for_ntfy
   start_container
   wait_for_dashboard
   add_model_key
@@ -139,6 +183,9 @@ up() {
 down() {
   podman stop -t 20 "$CONTAINER" > /dev/null 2>&1 || true
   podman rm -f "$CONTAINER" > /dev/null 2>&1 || true
+  podman stop -t 5 "$NTFY_CONTAINER" > /dev/null 2>&1 || true
+  podman rm -f "$NTFY_CONTAINER" > /dev/null 2>&1 || true
+  podman network rm "$NETWORK" > /dev/null 2>&1 || true
   echo "hermes e2e down"
 }
 

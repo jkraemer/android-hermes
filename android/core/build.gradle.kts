@@ -45,4 +45,6 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+    // Decrypts what the hermes-app plugin pushes, as the UnifiedPush connector does on the phone.
+    "e2eTestImplementation"(libs.tink.webpush)
 }
