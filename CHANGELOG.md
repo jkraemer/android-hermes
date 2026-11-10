@@ -4,6 +4,8 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-10
+
 ### Fixed
 
 - Rotating the phone keeps a chat where you had scrolled to instead of jumping
