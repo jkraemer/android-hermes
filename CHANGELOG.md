@@ -10,6 +10,8 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
   to its end.
 - After a reconnect, an approval that arrives at the same moment is no longer
   marked as answered elsewhere, and one that timed out while away shows that.
+- An approval you answer right after the app reconnects keeps your answer
+  instead of reopening.
 
 ## [0.2.1] - 2026-11-09
 
