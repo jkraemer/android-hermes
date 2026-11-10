@@ -7,6 +7,7 @@ import net.jkraemer.hermes.MainActivity
 import net.jkraemer.hermes.core.push.Channel
 import net.jkraemer.hermes.core.push.PushNotification
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -88,6 +89,27 @@ class NotifierTest {
         assertTrue(shadow.flags and PendingIntent.FLAG_IMMUTABLE != 0)
         assertEquals(MainActivity::class.java.name, shadow.savedIntent.component!!.className)
         assertEquals("s1", shadow.savedIntent.getStringExtra("session_id"))
+    }
+
+    @Test
+    fun tappingACronNotificationMarksTheSessionAsACronRun() {
+        notifier.createChannels()
+
+        notifier.show(PushNotification("session:run1", Channel.CRON, "Nightly", "Backups done.", "run1"))
+
+        val intent = shadowOf(posted().single().contentIntent).savedIntent
+        assertEquals("run1", intent.getStringExtra("session_id"))
+        assertTrue(intent.getBooleanExtra("cron", false))
+    }
+
+    @Test
+    fun tappingAnyOtherNotificationCarriesNoCronMark() {
+        notifier.createChannels()
+
+        notifier.show(reply())
+        notifier.show(PushNotification("request:r1", Channel.APPROVALS, "Approval needed", "ls", "s1"))
+
+        posted().forEach { assertFalse(shadowOf(it.contentIntent).savedIntent.hasExtra("cron")) }
     }
 
     @Test

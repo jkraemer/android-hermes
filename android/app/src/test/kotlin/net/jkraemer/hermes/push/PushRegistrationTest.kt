@@ -12,10 +12,13 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import net.jkraemer.hermes.core.push.PushApi
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -155,6 +158,26 @@ class PushRegistrationTest {
         assertEquals("""{"endpoint":"https://ntfy.sh/up1?up=1","p256dh":"p256dh-key","auth":"auth-key"}""", request.body.readUtf8())
         assertEquals(2, server.requestCount)
         assertEquals(PushStatus.On, registration.status.value)
+    }
+
+    @Test
+    fun theServerEndsWithTheNewestEndpointEvenWhenAnEarlierRequestIsSlow() {
+        val applied = java.util.Collections.synchronizedList(mutableListOf<String>())
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val endpoint = request.body.readUtf8()
+                if ("up1" in endpoint) Thread.sleep(300)
+                applied += endpoint
+                return MockResponse().setResponseCode(204)
+            }
+        }
+
+        registration.onEndpoint("https://ntfy.sh/up1?up=1", "k", "a")
+        registration.onEndpoint("https://ntfy.sh/up2?up=1", "k", "a")
+
+        awaitStatus(PushStatus.On)
+        Thread.sleep(600)
+        assertTrue("the last applied endpoint is up2: $applied", "up2" in applied.last())
     }
 
     @Test

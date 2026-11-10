@@ -1,26 +1,36 @@
 package net.jkraemer.hermes.settings
 
+import android.Manifest
+import android.app.NotificationManager
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.provider.Settings
+import androidx.activity.ComponentActivity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import net.jkraemer.hermes.push.PushStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLooper
 
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w411dp-h4000dp")
 class SettingsScreenTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
 
     private var retries = 0
     private var testsSent = 0
+    private var permissionResults = 0
     private var sendTest: suspend () -> Unit = { testsSent++ }
 
     private fun show(status: PushStatus) {
@@ -28,7 +38,7 @@ class SettingsScreenTest {
             MaterialTheme {
                 SettingsScreen(
                     favoriteCount = 0, push = status, onBack = {}, onOpenFavoriteModels = {}, onRetryPush = { retries++ },
-                    onNotificationPermissionResult = {}, onSendTest = { sendTest() },
+                    onNotificationPermissionResult = { permissionResults++ }, onSendTest = { sendTest() },
                 )
             }
         }
@@ -121,5 +131,69 @@ class SettingsScreenTest {
             ShadowLooper.idleMainLooper()
             compose.onAllNodes(hasText("Couldn't send: no subscription")).fetchSemanticsNodes().isNotEmpty()
         }
+    }
+
+    private val app = RuntimeEnvironment.getApplication()
+
+    private fun tapAllowNotifications() {
+        show(PushStatus.NeedsPermission)
+        compose.onNodeWithText("Notifications").performClick()
+    }
+
+    // The deprecated callback is what the framework calls with the user's answer; the registry takes it from there.
+    @Suppress("DEPRECATION")
+    private fun answerPermissionRequest(grant: Int, rationale: Boolean) {
+        val activityShadow = shadowOf(compose.activity)
+        shadowOf(app.packageManager).setShouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS, rationale)
+        val requested = activityShadow.lastRequestedPermission
+        assertEquals(listOf(Manifest.permission.POST_NOTIFICATIONS), requested.requestedPermissions.toList())
+        compose.activity.onRequestPermissionsResult(requested.requestCode, requested.requestedPermissions, intArrayOf(grant))
+        ShadowLooper.idleMainLooper()
+    }
+
+    // The permission request itself is an activity too, so only the notification settings count.
+    private fun startedSettings() = generateSequence { shadowOf(app).nextStartedActivity }
+        .filter { it.action == Settings.ACTION_APP_NOTIFICATION_SETTINGS }.toList()
+
+    @Test
+    fun tappingAllowNotificationsAsksForThePermission() {
+        tapAllowNotifications()
+
+        answerPermissionRequest(PackageManager.PERMISSION_GRANTED, rationale = false)
+
+        assertEquals(1, permissionResults)
+        assertEquals(emptyList<Intent>(), startedSettings())
+    }
+
+    @Test
+    fun aFirstDenialOnlyReportsTheResult() {
+        tapAllowNotifications()
+
+        answerPermissionRequest(PackageManager.PERMISSION_DENIED, rationale = true)
+
+        assertEquals(1, permissionResults)
+        assertEquals(emptyList<Intent>(), startedSettings())
+    }
+
+    @Test
+    fun aDenialThatCannotBeAskedAgainOpensTheAppsNotificationSettings() {
+        tapAllowNotifications()
+
+        answerPermissionRequest(PackageManager.PERMISSION_DENIED, rationale = false)
+
+        val intent = startedSettings().single()
+        assertEquals(app.packageName, intent.getStringExtra(Settings.EXTRA_APP_PACKAGE))
+        assertEquals(1, permissionResults)
+    }
+
+    @Test
+    fun notificationsSwitchedOffDespiteTheGrantedPermissionOpenTheSettingsDirectly() {
+        shadowOf(app).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        shadowOf(app.getSystemService(NotificationManager::class.java)).setNotificationsEnabled(false)
+
+        tapAllowNotifications()
+
+        assertEquals(1, startedSettings().size)
+        assertNull(shadowOf(compose.activity).lastRequestedPermission)
     }
 }

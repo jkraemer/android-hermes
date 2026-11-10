@@ -51,7 +51,10 @@ class Notifier(private val context: Context) : Notifications {
     private fun opening(notification: PushNotification): PendingIntent {
         val intent = Intent(context, MainActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-            .apply { notification.sessionId?.let { putExtra(EXTRA_SESSION_ID, it) } }
+            .apply {
+                notification.sessionId?.let { putExtra(EXTRA_SESSION_ID, it) }
+                if (notification.channel == Channel.CRON) putExtra(EXTRA_CRON, true)
+            }
         return PendingIntent.getActivity(context, idOf(notification.key), intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 
@@ -61,6 +64,9 @@ class Notifier(private val context: Context) : Notifications {
     companion object {
         /** The stored id of the session a tapped notification opens. */
         const val EXTRA_SESSION_ID = "session_id"
+
+        /** Present on the notifications of cron runs, which the chat shows as a report rather than a conversation. */
+        const val EXTRA_CRON = "cron"
     }
 }
 

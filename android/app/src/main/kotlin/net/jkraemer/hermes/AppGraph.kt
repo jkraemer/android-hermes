@@ -191,6 +191,11 @@ class AppGraph(private val context: Context) {
         { pushApi }, UnifiedPushDistributor, { context.getSystemService(NotificationManager::class.java).areNotificationsEnabled() }, scope,
     )
 
+    /** Whether the app has asked for the notification permission on its own initiative, which it does once per install. */
+    var askedForNotificationPermission: Boolean
+        get() = prefs.getBoolean(ASKED_NOTIFICATION_PERMISSION_KEY, false)
+        set(value) = prefs.edit().putBoolean(ASKED_NOTIFICATION_PERMISSION_KEY, value).apply()
+
     val pushHandler = PushHandler(
         pushRegistration,
         pushedNeedsAnswer,
@@ -273,5 +278,6 @@ class AppGraph(private val context: Context) {
         const val LOG_TAG = "Hermes"
         const val PREFS_NAME = "hermes"
         const val SERVER_URL_KEY = "server_url"
+        const val ASKED_NOTIFICATION_PERMISSION_KEY = "asked_notification_permission"
     }
 }

@@ -28,6 +28,7 @@ import net.jkraemer.hermes.push.PushStatus
 import net.jkraemer.hermes.settings.FavoriteModelsScreen
 import net.jkraemer.hermes.settings.FavoriteModelsViewModel
 import net.jkraemer.hermes.settings.SettingsScreen
+import net.jkraemer.hermes.settings.rememberNotificationPermissionRequest
 import net.jkraemer.hermes.ui.HermesTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -52,14 +53,14 @@ class MainActivity : ComponentActivity() {
     private val graph get() = (application as HermesApp).graph
 
     /** The session a tapped notification asked for, until the app has opened it. */
-    private val requestedSession = mutableStateOf<String?>(null)
+    private val requestedSession = mutableStateOf<RequestedSession?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The system bar icons follow the system's light or dark setting, like the theme does.
         enableEdgeToEdge()
         // A recreated activity restores its screen; the launching intent was already acted on.
-        if (savedInstanceState == null) requestedSession.value = intent.getStringExtra(Notifier.EXTRA_SESSION_ID)
+        if (savedInstanceState == null) requestedSession.value = intent.requestedSession()
         setContent {
             HermesTheme {
                 Surface { HermesRoot(graph, requestedSession.value) { requestedSession.value = null } }
@@ -70,8 +71,11 @@ class MainActivity : ComponentActivity() {
     // A tapped notification reaches the running activity here.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent.getStringExtra(Notifier.EXTRA_SESSION_ID)?.let { requestedSession.value = it }
+        intent.requestedSession()?.let { requestedSession.value = it }
     }
+
+    private fun Intent.requestedSession() =
+        getStringExtra(Notifier.EXTRA_SESSION_ID)?.let { RequestedSession(it, getBooleanExtra(Notifier.EXTRA_CRON, false)) }
 
     // Coming to the foreground is when a failed connection gets its next try.
     override fun onStart() {
@@ -79,6 +83,9 @@ class MainActivity : ComponentActivity() {
         graph.reconnect()
     }
 }
+
+/** A session a notification opens; [cron] runs are shown as reports. */
+private data class RequestedSession(val id: String, val cron: Boolean)
 
 private fun Screen.toJson(): JSONObject = when (this) {
     Screen.Login -> JSONObject().put("screen", "login")
@@ -126,7 +133,7 @@ internal val ScreenSaver = Saver<Screen?, String>(
 )
 
 @Composable
-private fun HermesRoot(graph: AppGraph, requestedSession: String?, onSessionOpened: () -> Unit) {
+private fun HermesRoot(graph: AppGraph, requestedSession: RequestedSession?, onSessionOpened: () -> Unit) {
     var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen?>(null) }
     val scope = rememberCoroutineScope()
 
@@ -136,7 +143,7 @@ private fun HermesRoot(graph: AppGraph, requestedSession: String?, onSessionOpen
     // A session asked for by a notification opens once there is somewhere to open it: after the start screen is known and not the login.
     LaunchedEffect(requestedSession, screen == null || screen == Screen.Login) {
         if (requestedSession != null && screen != null && screen != Screen.Login) {
-            screen = Screen.Chat(requestedSession)
+            screen = Screen.Chat(requestedSession.id, cron = requestedSession.cron)
             onSessionOpened()
         }
     }
@@ -152,6 +159,17 @@ private fun HermesRoot(graph: AppGraph, requestedSession: String?, onSessionOpen
     val activity = LocalContext.current as ComponentActivity
     LaunchedEffect(screen == null || screen == Screen.Login) {
         if (screen != null && screen != Screen.Login) graph.pushRegistration.start(activity)
+    }
+
+    // Notifications are off until allowed: ask once, right after the first registration, rather than leave it to the settings.
+    val notificationPermission = rememberNotificationPermissionRequest(graph.pushRegistration::permissionChanged)
+    val pushRegistered by graph.pushRegistration.registered.collectAsStateWithLifecycle()
+    val pushStatus by graph.pushRegistration.status.collectAsStateWithLifecycle()
+    LaunchedEffect(pushRegistered, pushStatus) {
+        if (pushRegistered && pushStatus == PushStatus.NeedsPermission && !graph.askedForNotificationPermission) {
+            graph.askedForNotificationPermission = true
+            notificationPermission.ask()
+        }
     }
 
     when (val current = screen) {

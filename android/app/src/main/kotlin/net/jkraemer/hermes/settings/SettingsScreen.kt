@@ -1,8 +1,5 @@
 package net.jkraemer.hermes.settings
 
-import android.Manifest
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
@@ -29,7 +26,8 @@ import net.jkraemer.hermes.push.PushStatus
 /**
  * The app's settings; [favoriteCount] is how many favorite models are set and [push] whether notifications work.
  * Tapping the notifications row asks for the permission when that is missing ([onNotificationPermissionResult] follows
- * the answer), else runs [onRetryPush]. [onSendTest] throws when the test notification could not be requested.
+ * the answer; when asking is no longer possible, the app's notification settings open), else runs [onRetryPush].
+ * [onSendTest] throws when the test notification could not be requested.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -44,7 +42,7 @@ fun SettingsScreen(
 ) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { onNotificationPermissionResult() }
+    val permission = rememberNotificationPermissionRequest(onNotificationPermissionResult)
     Scaffold(
         modifier = Modifier.testTag("settings-screen"),
         topBar = {
@@ -66,7 +64,7 @@ fun SettingsScreen(
                 supportingContent = { Text(push.describe()) },
                 modifier = Modifier.clickable {
                     when (push) {
-                        PushStatus.NeedsPermission -> permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        PushStatus.NeedsPermission -> permission.allow()
                         PushStatus.Registering -> Unit
                         else -> onRetryPush()
                     }

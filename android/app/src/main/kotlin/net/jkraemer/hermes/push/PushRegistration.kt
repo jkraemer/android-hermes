@@ -7,8 +7,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import net.jkraemer.hermes.core.push.PluginMissingException
 import net.jkraemer.hermes.core.push.PushApi
+import java.util.concurrent.atomic.AtomicReference
 
 /** Whether the app gets pushes, as the settings show it. */
 sealed interface PushStatus {
@@ -62,6 +65,11 @@ class PushRegistration(
     private val _status = MutableStateFlow<PushStatus>(if (notificationsAllowed()) PushStatus.Registering else PushStatus.NeedsPermission)
     val status: StateFlow<PushStatus> = _status
 
+    private val _registered = MutableStateFlow(false)
+
+    /** Whether the server has taken the current endpoint, whatever the notification permission. */
+    val registered: StateFlow<Boolean> = _registered
+
     /** Registers again; the distributor may have changed or forgotten the registration since the last start. */
     fun start(activity: Activity) = distributor.useCurrentOrDefault(activity) { register(activity, it) }
 
@@ -88,21 +96,33 @@ class PushRegistration(
         if (outcome != Outcome.Registered) update(Outcome.Registering)
     }
 
+    // Endpoints arrive on separate coroutines; one request at a time, and only the newest endpoint, so the server ends with it.
+    private val subscribing = Mutex()
+    private val newestEndpoint = AtomicReference<String?>(null)
+
     fun onEndpoint(url: String, p256dh: String, auth: String) {
+        newestEndpoint.set(url)
         scope.launch {
-            update(
-                try {
-                    api().subscribe(url, p256dh, auth)
-                    Outcome.Registered
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: PluginMissingException) {
-                    Outcome.PluginMissing
-                } catch (e: Exception) {
-                    Outcome.Failed(e.message ?: e::class.java.simpleName)
-                },
-            )
+            subscribing.withLock {
+                if (newestEndpoint.get() != url) return@launch
+                subscribe(url, p256dh, auth)
+            }
         }
+    }
+
+    private suspend fun subscribe(url: String, p256dh: String, auth: String) {
+        update(
+            try {
+                api().subscribe(url, p256dh, auth)
+                Outcome.Registered
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: PluginMissingException) {
+                Outcome.PluginMissing
+            } catch (e: Exception) {
+                Outcome.Failed(e.message ?: e::class.java.simpleName)
+            },
+        )
     }
 
     fun onRegistrationFailed(reason: String) = update(Outcome.Failed(reason))
@@ -123,6 +143,7 @@ class PushRegistration(
     @Synchronized
     private fun update(new: Outcome) {
         outcome = new
+        _registered.value = new == Outcome.Registered
         _status.value = when (new) {
             Outcome.NoDistributor -> PushStatus.NoDistributor
             Outcome.PluginMissing -> PushStatus.PluginMissing

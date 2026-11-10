@@ -15,6 +15,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import android.app.NotificationManager
 import android.content.Intent
 import androidx.lifecycle.Lifecycle
 import androidx.test.platform.app.InstrumentationRegistry
@@ -35,12 +36,14 @@ import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.shadows.ShadowLooper
 
 private const val CRON_TRANSCRIPT = """[{"role":"user","text":"/attention-check"},{"role":"assistant","text":"All quiet."}]"""
@@ -110,6 +113,7 @@ class MainActivityTest {
                 }
                 if (gateway && request.path == "/api/auth/ws-ticket") return MockResponse().setBody("""{"ticket":"t"}""")
                 if (gateway && request.path?.startsWith("/api/ws") == true) return MockResponse().withWebSocketUpgrade(FakeGateway(transcript))
+                if (request.method == "PUT" && path == "/api/plugins/hermes-app/subscription") return MockResponse().setResponseCode(204)
                 return MockResponse().setResponseCode(
                     when (request.path) {
                         "/api/auth/me" -> me
@@ -209,6 +213,52 @@ class MainActivityTest {
         return rpcCalls("session.resume").lastOrNull()?.get("session_id")?.jsonPrimitive?.content
     }
 
+    private fun registerEndpoint() = graph.pushRegistration.onEndpoint("https://ntfy.sh/up1?up=1", "k", "a")
+
+    private fun permissionAsked(scenario: ActivityScenario<MainActivity>): Boolean {
+        ShadowLooper.idleMainLooper()
+        var asked = false
+        scenario.onActivity { asked = shadowOf(it).lastRequestedPermission != null }
+        return asked
+    }
+
+    @Test
+    fun theNotificationPermissionIsAskedOnceAfterTheFirstRegistration() {
+        shadowOf(RuntimeEnvironment.getApplication().getSystemService(NotificationManager::class.java)).setNotificationsEnabled(false)
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            assertFalse("not before the server took the endpoint", permissionAsked(scenario))
+
+            registerEndpoint()
+
+            compose.waitUntil(10_000) { permissionAsked(scenario) }
+        }
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+
+            registerEndpoint()
+
+            compose.waitUntil(10_000) { graph.pushRegistration.registered.value }
+            assertFalse("not again on a later start", permissionAsked(scenario))
+        }
+    }
+
+    @Test
+    fun theNotificationPermissionIsNotAskedWhenNotificationsAreAllowed() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+
+            registerEndpoint()
+
+            compose.waitUntil(10_000) { graph.pushRegistration.registered.value }
+            assertFalse(permissionAsked(scenario))
+        }
+    }
+
     @Test
     fun launchedByANotificationOpensItsSession() {
         serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Baking" to "tui"), gateway = true)
@@ -216,6 +266,17 @@ class MainActivityTest {
         ActivityScenario.launch<MainActivity>(notificationTap("id-Baking")).use {
             awaitTag("chat-screen")
             compose.waitUntil(10_000) { lastResumedSession() == "id-Baking" }
+        }
+    }
+
+    @Test
+    fun aCronNotificationOpensItsRunWithTheWorkCollapsed() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true, transcript = CRON_TRANSCRIPT, cron = true)
+        storeSessionCookie()
+        ActivityScenario.launch<MainActivity>(notificationTap("run1").putExtra("cron", true)).use {
+            awaitTag("chat-screen")
+            await(inChat("Show work (1 step)"))
+            assertTrue(compose.onAllNodes(inChat("/attention-check")).fetchSemanticsNodes().isEmpty())
         }
     }
 
