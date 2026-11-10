@@ -4,6 +4,7 @@ Shared by the dashboard process (routes) and the gateway process (hooks) through
 every operation is its own short transaction on its own connection, so two processes never hold a lock long.
 """
 
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -31,6 +32,8 @@ class Subscription:
 class Store:
     def __init__(self, path: Path):
         self._path = path
+        # The database holds the subscription's auth secret; SQLite gives the WAL/SHM files the main file's mode.
+        os.close(os.open(path, os.O_CREAT, 0o600))
         with self._connect() as db:
             db.execute("PRAGMA journal_mode=WAL")
             db.executescript(_SCHEMA)
@@ -57,9 +60,13 @@ class Store:
                 (subscription.endpoint, subscription.p256dh, subscription.auth),
             )
 
-    def clear_subscription(self) -> None:
+    def clear_subscription(self, endpoint: str | None = None) -> None:
+        """Forget the subscription; with an endpoint, only if it is still that one (a newer registration survives)."""
         with self._connect() as db:
-            db.execute("DELETE FROM subscription")
+            if endpoint is None:
+                db.execute("DELETE FROM subscription")
+            else:
+                db.execute("DELETE FROM subscription WHERE endpoint = ?", (endpoint,))
 
     def follow(self, session_id: str, now: float) -> None:
         with self._connect() as db:

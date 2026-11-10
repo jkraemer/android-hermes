@@ -195,3 +195,18 @@ def test_the_exit_wait_is_ten_seconds_by_default():
     from sender import EXIT_WAIT_SECONDS
 
     assert EXIT_WAIT_SECONDS == 10
+
+
+@pytest.mark.parametrize("status", [404, 410])
+def test_gone_endpoint_does_not_drop_a_subscription_replaced_meanwhile(store, key_and_sub, status):
+    store.set_subscription(key_and_sub[2])
+    renewed = Subscription("https://ntfy.example/renewed", "p2", "a2")
+
+    def replaced_while_posting(url, body, headers):
+        store.set_subscription(renewed)
+        return status
+
+    s = sender_with(store, replaced_while_posting)
+    s.submit(event_json("test"))
+    s.drain_for_tests(5)
+    assert store.subscription() == renewed

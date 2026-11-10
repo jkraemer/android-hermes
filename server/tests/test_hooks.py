@@ -158,7 +158,7 @@ def test_store_failure_is_logged_without_content_and_never_raised(caplog):
         hooks["on_human_input_request"](kind="approval", request_id="r1", session_id="s1", platform="tui", prompt="secret-text")
     assert "RuntimeError" in caplog.text
     assert "secret-text" not in caplog.text
-    assert sender.events == []
+    assert [e["type"] for e in sender.sent()] == ["approval"]
 
 
 def test_register_registers_the_three_hooks():
@@ -186,3 +186,15 @@ def test_install_copies_the_plugin_without_pycache(tmp_path):
 
 def test_install_is_executable():
     assert os.access(SERVER / "install.sh", os.X_OK)
+
+
+def test_approval_is_pushed_even_when_remembering_the_request_fails(caplog):
+    class RememberFails:
+        def remember_request(self, *args):
+            raise RuntimeError("disk full")
+
+    sender = FakeSender()
+    hooks = load_plugin().make_hooks(FakeCtx(), lambda: RememberFails(), sender)
+    with caplog.at_level(logging.WARNING):
+        hooks["on_human_input_request"](kind="approval", request_id="r1", session_id="s1", platform="tui", prompt="ls")
+    assert [e["type"] for e in sender.sent()] == ["approval"]

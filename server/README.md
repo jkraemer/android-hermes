@@ -26,10 +26,15 @@ load the plugin: the dashboard serves the routes and runs the app's chat turns, 
 (Instead of the first command, add `hermes-app` to `plugins.enabled` in `config.yaml`.)
 The plugin needs nothing beyond what Hermes ships: the standard library, `cryptography`, `httpx` and `fastapi`.
 
+The app's test notification only proves the dashboard side (routes, subscription, push service). Cron pushes come
+from the gateway, which loads the plugin on its own, so a gateway that was not restarted after install or enable
+sends none even though the test notification arrives.
+
 ## Push service
 
 Pushes go through whatever endpoint the UnifiedPush distributor gives the app; with ntfy.sh that is a public
-topic URL. The content is encrypted, so the topic only leaks that a push happened. A private ntfy instance
+topic URL. The content is encrypted, so the topic does not reveal it, but anyone who learns the topic URL sees
+that a push happened, when, and roughly how large it was. A private ntfy instance
 later should not allow reads of the topics, e.g. `ntfy access '*' 'up*' write-only`.
 
 ## Tests

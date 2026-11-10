@@ -68,3 +68,20 @@ def test_two_stores_on_one_file_see_each_others_writes(tmp_path):
     assert b.pushed_request("r1") == "s1"
     b.clear_subscription()
     assert a.subscription() is None
+
+
+def test_clearing_a_specific_endpoint_keeps_a_different_subscription(store):
+    store.set_subscription(SUB)
+    store.clear_subscription("https://ntfy.example/other")
+    assert store.subscription() == SUB
+    store.clear_subscription(SUB.endpoint)
+    assert store.subscription() is None
+
+
+def test_database_files_are_private_to_the_owner(tmp_path):
+    path = tmp_path / "push.db"
+    store = Store(path)
+    store.set_subscription(SUB)
+    files = [p for p in tmp_path.iterdir() if p.name.startswith("push.db")]
+    assert path in files
+    assert {oct(p.stat().st_mode & 0o777) for p in files} == {"0o600"}

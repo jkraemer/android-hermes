@@ -98,4 +98,4 @@ class Sender:
         status = self._post(subscription.endpoint, body, dict(HEADERS))
         log.info("push %s: HTTP %s", event_type, status)
         if status in (404, 410):
-            store.clear_subscription()
+            store.clear_subscription(subscription.endpoint)

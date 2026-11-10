@@ -71,8 +71,9 @@ def make_hooks(ctx, store_factory, sender) -> dict:
     def on_human_input_request(kind=None, request_id=None, session_id=None, platform=None, prompt=None, **kwargs):
         if kind not in _PUSHED_KINDS or platform not in _APP_PLATFORMS:
             return
-        store_factory().remember_request(request_id, session_id, time.time())
         sender.submit(_events.event_json(kind, session_id=session_id, request_id=request_id, text=prompt))
+        # After the push, so a store failure only loses the later `resolved` push, not the approval itself.
+        store_factory().remember_request(request_id, session_id, time.time())
 
     @_never_raise
     def on_human_input_resolved(request_id=None, **kwargs):
