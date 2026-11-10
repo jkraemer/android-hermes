@@ -4,6 +4,21 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+### Added
+
+- Typing "/" in a chat opens a menu with Hermes' commands and skills. Pick one
+  to insert it, or keep typing to narrow the list.
+- A model chip next to the message field opens the session options: pick one
+  of your favorite models, set the reasoning level, and turn fast mode and
+  YOLO on or off. These options only change the current chat; Hermes' default
+  stays as it is.
+- Typing /model, /reasoning, /fast or /yolo with arguments works as it does in
+  Hermes: it applies to the current chat only, unless you add --global, for
+  example /model <name> --global, which changes Hermes' default. Without
+  arguments they open the session options.
+- Settings has a new "Favorite models" screen: search Hermes' models, star
+  the ones you want, and drag them into the order the options sheet shows.
+
 ## [0.2.2] - 2026-11-10
 
 ### Fixed
