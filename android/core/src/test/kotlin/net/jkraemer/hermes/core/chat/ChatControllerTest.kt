@@ -13,6 +13,7 @@ import kotlinx.coroutines.yield
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -52,7 +53,7 @@ private class FakePeer : RpcPeer {
     init {
         // What an idle live session answers; tests override the ones they care about.
         on("session.events.since", """{"events":[],"latest_seq":0,"truncated":false,"epoch":"e1","open_requests":[]}""")
-        on("session.activate", """{"session_id":"live1","messages":[],"running":false,"open_requests":[]}""")
+        on("session.activate", activateResult())
     }
 
     fun on(method: String, handler: suspend (JsonObject) -> JsonElement) {
@@ -81,6 +82,10 @@ private fun resumeResult(
     openRequests: String = "[]",
     extra: String = "",
 ) = """{"session_id":"live1","stored_session_id":"stored1","messages":$messages,"running":false,"open_requests":$openRequests$extra}"""
+
+/** Hermes leaves `open_requests` out of a `session.activate` result when no request is open. */
+private fun activateResult(openRequests: String? = null) =
+    """{"session_id":"live1","messages":[],"running":false${openRequests?.let { ""","open_requests":$it""" }.orEmpty()}}"""
 
 private const val APPROVAL_REQUEST =
     """{"id":"srq-1","method":"approval","params":{"session_id":"live1","request_id":"r1","command":"rm x"}}"""
@@ -475,7 +480,7 @@ class ChatControllerTest {
             logLines.toList(),
         )
 
-        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":false,"open_requests":[]}""")
+        peer.on("session.activate", activateResult())
         peer.on("session.events.since", sinceResult("[]", epoch = "e2", latestSeq = 0))
         logLines.clear()
 
@@ -620,13 +625,14 @@ class ChatControllerTest {
         peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST,$CLARIFY_REQUEST]"))
         chat.open("stored1")
         // The other client answered both; Hermes lists neither any more and emits no event.
-        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":false,"open_requests":[]}""")
+        peer.on("session.activate", activateResult())
+        peer.on("session.events.since", sinceResult("[]", latestSeq = 0, openRequests = "[]"))
 
         dropConnection(peer)
 
         assertEquals(
             listOf(CardStatus.Cancelled("answered elsewhere"), CardStatus.Cancelled("answered elsewhere")),
-            chat.state.value.items.map { (it as? ChatItem.Approval)?.status ?: (it as ChatItem.Clarify).status },
+            cardStatuses(chat),
         )
     }
 
@@ -652,10 +658,64 @@ class ChatControllerTest {
 
         dropConnection(peer)
 
-        assertEquals(
-            listOf(CardStatus.Open, CardStatus.Open),
-            chat.state.value.items.map { (it as? ChatItem.Approval)?.status ?: (it as ChatItem.Clarify).status },
-        )
+        assertEquals(listOf(CardStatus.Open, CardStatus.Open), cardStatuses(chat))
+    }
+
+    private fun cardStatuses(chat: ChatController) =
+        chat.state.value.items.map { (it as? ChatItem.Approval)?.status ?: (it as ChatItem.Clarify).status }
+
+    private val lateApproval = RpcFrame.ServerRequest(
+        "srq-3", "approval", obj("""{"session_id":"live1","request_id":"r3","command":"make"}"""),
+    )
+
+    /** Hermes took its snapshot, then a new approval's frame reached the app before the reply did. */
+    private suspend fun deliverLateApproval(peer: FakePeer, chat: ChatController) {
+        peer.serverRequests.tryEmit(lateApproval)
+        chat.state.first { state -> state.items.any { it is ChatItem.Approval && it.requestId == "srq-3" } }
+    }
+
+    @Test fun requestArrivingWhileEventsSinceIsAnsweredStaysOpen() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        chat.startNew()
+        peer.on("session.events.since") {
+            deliverLateApproval(peer, chat)
+            Json.parseToJsonElement(sinceResult("[]", latestSeq = 0, openRequests = "[]"))
+        }
+
+        dropConnection(peer)
+
+        val card = chat.state.value.items.single() as ChatItem.Approval
+        assertEquals("srq-3", card.requestId)
+        assertEquals(CardStatus.Open, card.status)
+    }
+
+    @Test fun requestArrivingWhileActivateIsAnsweredStaysOpen() = test { peer, chat ->
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST]"))
+        chat.open("stored1")
+        peer.on("session.activate") {
+            deliverLateApproval(peer, chat)
+            Json.parseToJsonElement(activateResult(openRequests = "[$APPROVAL_REQUEST]"))
+        }
+        val late = """{"id":"srq-3","method":"approval","params":${lateApproval.params}}"""
+        peer.on("session.events.since", sinceResult("[]", latestSeq = 0, openRequests = "[$APPROVAL_REQUEST,$late]"))
+
+        dropConnection(peer)
+
+        assertEquals(listOf("srq-1", "srq-3"), chat.state.value.items.map { (it as ChatItem.Approval).requestId })
+        assertEquals(listOf(CardStatus.Open, CardStatus.Open), cardStatuses(chat))
+    }
+
+    @Test fun requestThatTimedOutWhileAwayIsExpiredAfterReattach() = test { peer, chat ->
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST]"))
+        chat.open("stored1")
+        // While the app was away Hermes timed the approval out and asked a question that is still open.
+        peer.on("session.activate", activateResult(openRequests = "[$CLARIFY_REQUEST]"))
+        val timedOut = """{"type":"request.cancel","session_id":"live1","seq":1,"payload":{"id":"srq-1","method":"approval","reason":"timeout"}}"""
+        peer.on("session.events.since", sinceResult("[$timedOut]", latestSeq = 1, openRequests = "[$CLARIFY_REQUEST]"))
+
+        dropConnection(peer)
+
+        assertEquals(listOf(CardStatus.Expired, CardStatus.Open), cardStatuses(chat))
     }
 
     @Test fun answerApprovalAfterDeadlineIsRefused() = runTest(UnconfinedTestDispatcher()) {

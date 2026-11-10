@@ -17,7 +17,7 @@ fun reduce(state: ChatState, input: ChatInput): ChatState = when (input) {
     is ChatInput.Event -> reduceEvent(state, input.event)
     is ChatInput.Request -> reduceRequest(state, input.request, input.receivedAt, input.approvalTimeoutSeconds)
     is ChatInput.Answered -> state.updateCard(input.requestId) { CardStatus.Answered(input.label) }
-    is ChatInput.OpenRequests -> reconcileCards(state, input.ids)
+    is ChatInput.OpenRequests -> reconcileCards(state, input.ids, input.known)
 }
 
 /**
@@ -25,9 +25,10 @@ fun reduce(state: ChatState, input: ChatInput): ChatState = when (input) {
  * the only truth: an open card missing from it was answered elsewhere, and a card this client
  * marked answered but that is still listed never got its answer through.
  */
-private fun reconcileCards(state: ChatState, openIds: Set<String>): ChatState =
+private fun reconcileCards(state: ChatState, openIds: Set<String>, known: Set<String>): ChatState =
     state.copy(items = state.items.map { item ->
         when {
+            item.cardRequestId !in known -> item
             item is ChatItem.Approval && item.requestId !in openIds && item.status == CardStatus.Open ->
                 item.copy(status = CardStatus.Cancelled(ANSWERED_ELSEWHERE))
             item is ChatItem.Clarify && item.requestId !in openIds && item.status == CardStatus.Open ->
@@ -41,6 +42,14 @@ private fun reconcileCards(state: ChatState, openIds: Set<String>): ChatState =
     })
 
 private const val ANSWERED_ELSEWHERE = "answered elsewhere"
+
+/** The id of the server request an approval or clarify card answers; null for any other item. */
+internal val ChatItem.cardRequestId: String?
+    get() = when (this) {
+        is ChatItem.Approval -> requestId
+        is ChatItem.Clarify -> requestId
+        else -> null
+    }
 
 private fun JsonElement?.string(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
 private fun JsonElement?.boolean(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull
@@ -181,7 +190,7 @@ private fun reduceRequest(state: ChatState, request: RpcFrame.ServerRequest, rec
     val params = request.params
     val sessionId = params["session_id"].string()
     if (state.liveSessionId != null && sessionId != null && sessionId != state.liveSessionId) return state
-    if (state.items.any { (it is ChatItem.Approval && it.requestId == request.id) || (it is ChatItem.Clarify && it.requestId == request.id) }) return state
+    if (state.items.any { it.cardRequestId == request.id }) return state
     val item = when (request.method) {
         "approval" -> approvalItem(request.id, params, receivedAt, approvalTimeoutSeconds)
         "clarify" -> clarifyItem(request.id, params)

@@ -244,6 +244,30 @@ class ChatReducerTest {
         assertEquals(CardStatus.Answered("Allowed once"), (state.items.single() as ChatItem.Approval).status)
     }
 
+    @Test fun openRequestsSettleOnlyTheCardsKnownWhenTheCallWasSent() {
+        val state = run(
+            empty,
+            request("srq-1", "approval", """{"request_id":"r1","command":"c"}"""),
+            request("srq-2", "clarify", """{"questions":[{"qid":"q1","question":"Which?"}]}"""),
+            ChatInput.Answered("srq-2", "Answered"),
+            request("srq-3", "approval", """{"request_id":"r3","command":"c"}"""),
+            request("srq-4", "clarify", """{"questions":[{"qid":"q1","question":"Which?"}]}"""),
+            request("srq-5", "approval", """{"request_id":"r5","command":"c"}"""),
+            ChatInput.Answered("srq-5", "Allowed once"),
+            ChatInput.OpenRequests(ids = setOf("srq-2", "srq-5"), known = setOf("srq-1", "srq-2")),
+        )
+        assertEquals(
+            listOf(
+                CardStatus.Cancelled("answered elsewhere"),
+                CardStatus.Open,
+                CardStatus.Open,
+                CardStatus.Open,
+                CardStatus.Answered("Allowed once"),
+            ),
+            state.items.map { (it as? ChatItem.Approval)?.status ?: (it as ChatItem.Clarify).status },
+        )
+    }
+
     @Test fun redeliveredApprovalIsNotDuplicated() {
         val req = request("srq-1", "approval", """{"request_id":"r1","command":"c"}""")
         val once = run(empty, req)

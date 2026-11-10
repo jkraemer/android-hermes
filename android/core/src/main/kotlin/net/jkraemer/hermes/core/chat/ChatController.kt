@@ -211,6 +211,7 @@ class ChatController(
             )
             epoch = null
         }
+        // The chat was just rebuilt from this result, so there is nothing to settle against it.
         feedOpenRequests(result)
         if (live == null) return
         val position = peer.call("session.events.since", sinceParams(live, Long.MAX_VALUE)).jsonObject
@@ -226,11 +227,16 @@ class ChatController(
         put("last_seen", lastSeen)
     }
 
-    // Only open_requests are replayed: they carry the srq id an answer must target.
-    // session.resume's pending_approval cannot be answered by a response frame.
-    // The list is complete, so cards it does not mention are settled against it.
-    private fun feedOpenRequests(result: JsonObject) {
-        val open = result["open_requests"] as? JsonArray ?: return
+    /** The request ids of the cards the chat shows; read before a call whose reply settles them. */
+    private fun knownRequestIds(): Set<String> = _state.value.items.mapNotNullTo(mutableSetOf()) { it.cardRequestId }
+
+    /**
+     * Adds a card for each request in the result's `open_requests` and returns their ids, or null
+     * when the result has no such list. Only open_requests are replayed: they carry the srq id an
+     * answer must target. session.resume's pending_approval cannot be answered by a response frame.
+     */
+    private fun feedOpenRequests(result: JsonObject): Set<String>? {
+        val open = result["open_requests"] as? JsonArray ?: return null
         val ids = mutableSetOf<String>()
         for (element in open) {
             val request = element as? JsonObject ?: continue
@@ -244,7 +250,16 @@ class ChatController(
                 ),
             ))
         }
-        feed(ChatInput.OpenRequests(ids))
+        return ids
+    }
+
+    /**
+     * The result's `open_requests` is complete, so the [known] cards it does not mention are settled
+     * against it; [known] are those the chat showed when the call was sent.
+     */
+    private fun settleOpenRequests(result: JsonObject, known: Set<String>) {
+        val ids = feedOpenRequests(result) ?: return
+        feed(ChatInput.OpenRequests(ids, known))
     }
 
     /**
@@ -292,7 +307,10 @@ class ChatController(
             return reopen(stored)
         }
         log.log("resync: session.activate ok")
+        // Only adds cards: a request Hermes cancelled while the app was away is settled by its
+        // cancel event in the replay, which carries the reason.
         feedOpenRequests(activated)
+        val known = knownRequestIds()
         val missed = peer.call("session.events.since", sinceParams(live, _state.value.lastSeq)).jsonObject
         val restarted = missed.string("epoch") != epoch
         val latest = (missed["latest_seq"] as? JsonPrimitive)?.longOrNull ?: 0
@@ -310,7 +328,7 @@ class ChatController(
         val replayed = (missed["events"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::eventFrom) }
         replayed.forEach { feed(ChatInput.Event(it)) }
         log.log("resync: replayed ${replayed.size} events")
-        feedOpenRequests(missed)
+        settleOpenRequests(missed, known)
         return true
     }
 
