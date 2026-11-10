@@ -21,6 +21,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.jkraemer.hermes.sessions.SessionsDrawerContent
+import net.jkraemer.hermes.settings.FavoriteModelsScreen
+import net.jkraemer.hermes.settings.FavoriteModelsViewModel
+import net.jkraemer.hermes.settings.SettingsScreen
 import net.jkraemer.hermes.ui.HermesTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -74,6 +77,8 @@ private fun Screen.toJson(): JSONObject = when (this) {
     is Screen.Job -> JSONObject().put("screen", "job").put("key", key).put("id", jobId).put("name", name).apply {
         back?.let { put("back", it.toJson()) }
     }
+    is Screen.Settings -> JSONObject().put("screen", "settings").apply { back?.let { put("back", it.toJson()) } }
+    is Screen.FavoriteModels -> JSONObject().put("screen", "favorite-models").apply { back?.let { put("back", it.toJson()) } }
 }
 
 private fun JSONObject.toScreen(): Screen = when (getString("screen")) {
@@ -85,6 +90,8 @@ private fun JSONObject.toScreen(): Screen = when (getString("screen")) {
         optJSONObject("back")?.toScreen()?.also { require(it is Screen.Sessions || it is Screen.Chat) },
         getString("key"),
     )
+    "settings" -> Screen.Settings(optJSONObject("back")?.toScreen()?.also { require(it is Screen.Sessions || it is Screen.Chat || it is Screen.Job) })
+    "favorite-models" -> Screen.FavoriteModels(optJSONObject("back")?.toScreen())
     else -> Screen.Chat(
         optString("id").ifEmpty { null },
         optString("title").ifEmpty { null },
@@ -136,6 +143,20 @@ private fun HermesRoot(graph: AppGraph) {
             })
         }
         is Screen.Sessions, is Screen.Chat, is Screen.Job -> SessionsAndChat(graph, current) { screen = it }
+        is Screen.Settings -> {
+            val favorites by graph.favoritesStore.favorites.collectAsStateWithLifecycle()
+            BackHandler(current.back != null) { screen = current.back }
+            SettingsScreen(
+                favorites.size,
+                onBack = { screen = current.back },
+                onOpenFavoriteModels = { screen = Screen.FavoriteModels(back = current) },
+            )
+        }
+        is Screen.FavoriteModels -> {
+            val favoriteModels = viewModel { FavoriteModelsViewModel(graph.rpc, graph.favoritesStore) }
+            BackHandler(current.back != null) { screen = current.back }
+            FavoriteModelsScreen(favoriteModels, onBack = { screen = current.back })
+        }
     }
 }
 
@@ -228,6 +249,13 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     fun openRun(job: Screen.Job, sessionId: String, message: String? = null) =
         show(Screen.Chat(sessionId, job.name, listBehind(job), cron = true, fromJob = job, pendingMessage = message))
 
+    /** Settings go back to where they were opened, a chat being opened again like when going back from the list. */
+    fun openSettings() {
+        sessionList.closeSearch()
+        show(Screen.Settings(back = if (current is Screen.Chat) current.reopened() else current))
+        closeDrawer()
+    }
+
     ModalNavigationDrawer(
         drawerContent = {
             ModalDrawerSheet {
@@ -241,6 +269,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                     onOpenChat = ::openChat,
                     onOpenJob = ::openJob,
                     onViewAll = ::showList,
+                    onOpenSettings = ::openSettings,
                 )
             }
         },

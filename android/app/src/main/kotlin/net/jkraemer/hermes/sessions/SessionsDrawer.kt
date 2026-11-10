@@ -27,7 +27,7 @@ import net.jkraemer.hermes.core.timeline.TimelineItem
 
 /**
  * The navigation drawer: the app name with search and new chat, the cron jobs, the pinned sessions, the newest
- * others, and a link to the full list. [onOpenChat] gets the stored session id, its title and whether it is a cron
+ * others, a link to the full list, and Settings. [onOpenChat] gets the stored session id, its title and whether it is a cron
  * run; [onOpenJob] a cron job's id and name.
  */
 @Composable
@@ -38,6 +38,7 @@ fun SessionsDrawerContent(
     onOpenChat: (id: String, title: String?, cron: Boolean) -> Unit,
     onOpenJob: (jobId: String, name: String) -> Unit,
     onViewAll: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize()) {
         item {
@@ -68,6 +69,13 @@ fun SessionsDrawerContent(
                 Modifier.fillMaxWidth().clickable(onClick = onViewAll).padding(horizontal = 24.dp, vertical = 14.dp),
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.primary,
+            )
+        }
+        item(key = "settings") {
+            Text(
+                "Settings",
+                Modifier.fillMaxWidth().clickable(onClick = onOpenSettings).padding(horizontal = 24.dp, vertical = 14.dp),
+                style = MaterialTheme.typography.bodyLarge,
             )
         }
     }

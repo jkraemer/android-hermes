@@ -35,6 +35,7 @@ class SessionsDrawerTest {
     private val searches = mutableListOf<Unit>()
     private val newChats = mutableListOf<Unit>()
     private val viewAlls = mutableListOf<Unit>()
+    private val settingsOpened = mutableListOf<Unit>()
     private val opened = mutableListOf<Pair<String, String?>>()
     private val openedCron = mutableListOf<Boolean>()
     private val openedJobs = mutableListOf<Pair<String, String>>()
@@ -59,6 +60,7 @@ class SessionsDrawerTest {
                     },
                     onOpenJob = { id, name -> openedJobs += id to name },
                     onViewAll = { viewAlls += Unit },
+                    onOpenSettings = { settingsOpened += Unit },
                 )
             }
         }
@@ -67,6 +69,17 @@ class SessionsDrawerTest {
 
     private fun waitForText(text: String) = compose.waitUntil(10_000) {
         compose.onAllNodes(hasText(text)).fetchSemanticsNodes().isNotEmpty()
+    }
+
+    @Test
+    fun settingsRowOpensSettings() {
+        show(listOf(session("a")))
+        waitForText("a")
+
+        compose.onNodeWithText("Settings").performClick()
+
+        assertEquals(1, settingsOpened.size)
+        assertEquals(0, viewAlls.size)
     }
 
     @Test

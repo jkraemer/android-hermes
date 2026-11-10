@@ -19,6 +19,7 @@ import net.jkraemer.hermes.core.cron.FinalReplies
 import net.jkraemer.hermes.core.rpc.RpcConnection
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.SessionsApi
+import net.jkraemer.hermes.settings.FavoritesStore
 import net.jkraemer.hermes.settings.SeenStore
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -65,6 +66,12 @@ sealed interface Screen {
         val back: Screen? = null,
         val key: String = UUID.randomUUID().toString(),
     ) : Screen
+
+    /** The settings; back returns to [back], the list, chat or feed it was opened from. */
+    data class Settings(val back: Screen? = null) : Screen
+
+    /** The favorite models; back returns to [back], the settings or the chat options it was opened from. */
+    data class FavoriteModels(val back: Screen? = null) : Screen
 }
 
 /** A chat that was active within this long before launch is reopened instead of starting a new one. */
@@ -107,6 +114,8 @@ class AppGraph(context: Context) {
     private var services: Services? = null
 
     val seenStore = SeenStore(prefs)
+
+    val favoritesStore = FavoritesStore(prefs)
 
     /** Stored ids of the sessions waiting for the user's answer; the chat screen keeps it current. */
     val needsAnswer = MutableStateFlow(emptySet<String>())

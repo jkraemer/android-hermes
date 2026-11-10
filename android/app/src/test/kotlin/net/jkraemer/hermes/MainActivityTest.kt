@@ -412,6 +412,33 @@ class MainActivityTest {
     }
 
     @Test
+    fun settingsRoundTrip() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            await(inChat("Sourdough"))
+            openDrawer()
+            await(hasText("Settings"))
+            compose.onNodeWithText("Settings").performClick()
+            awaitTag("settings-screen")
+            compose.onNodeWithText("Favorite models").performClick()
+            awaitTag("favorite-models-screen")
+
+            scenario.recreate()
+            awaitTag("favorite-models-screen")
+            pressBack(scenario)
+            awaitTag("settings-screen")
+
+            scenario.recreate()
+            awaitTag("settings-screen")
+            pressBack(scenario)
+            awaitTag("chat-screen")
+            await(inChat("Sourdough"))
+        }
+    }
+
+    @Test
     fun theScreenSurvivesSavingAndRestoring() {
         val restore = { screen: Screen? ->
             with(ScreenSaver) {
@@ -435,6 +462,13 @@ class MainActivityTest {
         assertEquals(Screen.Chat(null, null, null, "k"), restore(Screen.Chat(null, null, null, "k")))
         assertEquals(list, restore(list))
         assertEquals(Screen.Sessions(), restore(Screen.Sessions()))
+        val settings = Screen.Settings(back = home)
+        assertEquals(settings, restore(settings))
+        assertEquals(Screen.Settings(back = job), restore(Screen.Settings(back = job)))
+        assertEquals(Screen.Settings(back = list), restore(Screen.Settings(back = list)))
+        assertEquals(Screen.FavoriteModels(back = settings), restore(Screen.FavoriteModels(back = settings)))
+        assertEquals(Screen.FavoriteModels(back = home), restore(Screen.FavoriteModels(back = home)))
+        assertEquals(Screen.FavoriteModels(back = null), restore(Screen.FavoriteModels(back = null)))
         assertEquals(Screen.Login, restore(Screen.Login))
         assertEquals(null, restore(null))
     }
