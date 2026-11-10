@@ -18,9 +18,11 @@ import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.jkraemer.hermes.sessions.SessionsDrawerContent
+import net.jkraemer.hermes.push.PushStatus
 import net.jkraemer.hermes.settings.FavoriteModelsScreen
 import net.jkraemer.hermes.settings.FavoriteModelsViewModel
 import net.jkraemer.hermes.settings.SettingsScreen
@@ -125,6 +127,12 @@ private fun HermesRoot(graph: AppGraph) {
         }
     }
 
+    // Registering again on every start keeps the server's subscription current; it needs the activity to offer the choice of distributor.
+    val activity = LocalContext.current as ComponentActivity
+    LaunchedEffect(screen == null || screen == Screen.Login) {
+        if (screen != null && screen != Screen.Login) graph.pushRegistration.start(activity)
+    }
+
     when (val current = screen) {
         null -> Unit
         Screen.Login -> {
@@ -146,10 +154,22 @@ private fun HermesRoot(graph: AppGraph) {
         is Screen.Settings -> {
             val favorites by graph.favoritesStore.favorites.collectAsStateWithLifecycle()
             BackHandler(current.back != null) { screen = current.back }
+            val push by graph.pushRegistration.status.collectAsStateWithLifecycle()
+            // The permission can be changed in the system settings while the app is away.
+            LifecycleResumeEffect(Unit) {
+                graph.pushRegistration.permissionChanged()
+                onPauseOrDispose {}
+            }
             SettingsScreen(
                 favorites.size,
+                push,
                 onBack = { screen = current.back },
                 onOpenFavoriteModels = { screen = Screen.FavoriteModels(back = current) },
+                onRetryPush = {
+                    if (push == PushStatus.NoDistributor) graph.pushRegistration.pickDistributor(activity) else graph.pushRegistration.start(activity)
+                },
+                onNotificationPermissionResult = graph.pushRegistration::permissionChanged,
+                onSendTest = { graph.pushApi.sendTest() },
             )
         }
         is Screen.FavoriteModels -> {

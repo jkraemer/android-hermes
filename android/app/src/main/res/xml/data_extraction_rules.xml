@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
+        <exclude domain="database" path="unifiedpush-connector" />
+        <exclude domain="database" path="unifiedpush-connector-journal" />
+        <exclude domain="sharedpref" path="unifiedpush.connector.xml" />
         <exclude domain="root" />
         <exclude domain="file" />
         <exclude domain="database" />
@@ -8,6 +11,9 @@
         <exclude domain="external" />
     </cloud-backup>
     <device-transfer>
+        <exclude domain="database" path="unifiedpush-connector" />
+        <exclude domain="database" path="unifiedpush-connector-journal" />
+        <exclude domain="sharedpref" path="unifiedpush.connector.xml" />
         <exclude domain="root" />
         <exclude domain="file" />
         <exclude domain="database" />

@@ -1,5 +1,6 @@
 package net.jkraemer.hermes
 
+import android.app.NotificationManager
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -16,9 +17,13 @@ import net.jkraemer.hermes.core.auth.NotLoggedInException
 import net.jkraemer.hermes.core.auth.PersistentCookieJar
 import net.jkraemer.hermes.core.cron.CronApi
 import net.jkraemer.hermes.core.cron.FinalReplies
+import net.jkraemer.hermes.core.push.PushApi
 import net.jkraemer.hermes.core.rpc.RpcConnection
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.SessionsApi
+import net.jkraemer.hermes.push.PushHandler
+import net.jkraemer.hermes.push.PushRegistration
+import net.jkraemer.hermes.push.UnifiedPushDistributor
 import net.jkraemer.hermes.settings.FavoritesStore
 import net.jkraemer.hermes.settings.SeenStore
 import okhttp3.HttpUrl
@@ -94,13 +99,14 @@ fun launchScreen(sessions: List<SessionSummary>, now: Instant): Screen {
  * What must exist once per process: the server URL, the cookie jar holding the login, and the
  * server clients built for that URL.
  */
-class AppGraph(context: Context) {
+class AppGraph(private val context: Context) {
     private class Services(
         val auth: HermesAuth,
         val sessions: SessionsApi,
         val rpc: RpcConnection,
         val cron: CronApi,
         val finalReplies: FinalReplies,
+        val push: PushApi,
     )
 
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -145,11 +151,21 @@ class AppGraph(context: Context) {
     /** The cron runs' final replies, kept while the server stays the same. */
     val finalReplies: FinalReplies get() = requireServices().finalReplies
 
+    val pushApi: PushApi get() = requireServices().push
+
+    /** The UnifiedPush registration; it sends the endpoint to the plugin of the current server. */
+    val pushRegistration = PushRegistration(
+        { pushApi }, UnifiedPushDistributor, { context.getSystemService(NotificationManager::class.java).areNotificationsEnabled() }, scope,
+    )
+
+    val pushHandler = PushHandler(pushRegistration)
+
     private fun buildServices(url: HttpUrl): Services {
         val auth = HermesAuth(url, client)
         val sessions = SessionsApi(url, client)
         return Services(
             auth, sessions, RpcConnection(client, url, auth::mintWsTicket, scope, log = log), CronApi(url, client), FinalReplies(sessions::finalReply),
+            PushApi(url, client),
         )
     }
 
