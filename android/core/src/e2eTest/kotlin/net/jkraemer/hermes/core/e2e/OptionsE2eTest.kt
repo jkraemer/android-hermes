@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import net.jkraemer.hermes.core.chat.ChatController
 import net.jkraemer.hermes.core.options.ModelRef
 import net.jkraemer.hermes.core.options.ModelSwitch
+import net.jkraemer.hermes.core.options.modelCatalog
 import net.jkraemer.hermes.core.options.runModelCommand
 import net.jkraemer.hermes.core.options.setReasoning
 import net.jkraemer.hermes.core.options.setYolo
@@ -128,6 +129,15 @@ class OptionsE2eTest {
 
         val observed = reopened(stored).state.value.options?.reasoning
         assertEquals("Hermes keeps an option set before the agent is built in memory only", "high", observed)
+    }
+
+    @Test
+    fun catalogOffersTheConfiguredModel() = runBlocking {
+        val app = connect()
+        val raw = app.rpc.call("model.options").jsonObject
+        val configured = ModelRef(raw.text("provider")!!, raw.text("model")!!)
+
+        assertTrue("$configured not offered", app.rpc.modelCatalog(null).offers(configured))
     }
 
     @Test
