@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -33,12 +34,17 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import net.jkraemer.hermes.core.commands.CommandCatalog
 import net.jkraemer.hermes.sessions.pathIcon
 
 /**
  * The message field with send, or stop while a turn runs. Empty and unfocused it is one pill; focused or holding text
- * it is a card with the field above a row of actions, whose start [leading] fills.
+ * it is a card with the field above a row of actions, whose start has the commands button and then [leading]. A text
+ * that starts with a slash and has no space yet lists the matching [commands] above the composer; [onMenuOpened]
+ * says that list was asked for, [prefill] is text to put into the field, which [onPrefillShown] acknowledges.
  */
 @Composable
 internal fun Composer(
@@ -47,10 +53,14 @@ internal fun Composer(
     onSend: (String) -> Unit,
     onStop: () -> Unit,
     keyboardVisible: Boolean,
+    prefill: String?,
+    onPrefillShown: () -> Unit,
+    commands: CommandCatalog?,
     modifier: Modifier = Modifier,
+    onMenuOpened: () -> Unit = {},
     leading: @Composable RowScope.() -> Unit = {},
 ) {
-    var text by rememberSaveable { mutableStateOf("") }
+    var text by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     var focused by remember { mutableStateOf(false) }
     // Closing the keyboard (back, or its hide key) leaves the field focused; let go of the focus
     // then, so an empty composer folds back into its one-row pill.
@@ -60,7 +70,15 @@ internal fun Composer(
         if (keyboardWasVisible && !keyboardVisible) focusManager.clearFocus()
         keyboardWasVisible = keyboardVisible
     }
-    val expanded = focused || text.isNotEmpty()
+    LaunchedEffect(prefill) {
+        if (prefill != null) {
+            text = TextFieldValue(prefill, TextRange(prefill.length))
+            onPrefillShown()
+        }
+    }
+    val commandPrefix = commandPrefix(text.text)
+    LaunchedEffect(commandPrefix != null) { if (commandPrefix != null) onMenuOpened() }
+    val expanded = focused || text.text.isNotEmpty()
     val sendOrStop = @Composable {
         if (running) {
             FilledIconButton(onStop, Modifier.semantics { contentDescription = "Stop" }) {
@@ -69,42 +87,67 @@ internal fun Composer(
         } else {
             FilledIconButton(
                 onClick = {
-                    onSend(text.trim())
-                    text = ""
+                    onSend(text.text.trim())
+                    text = TextFieldValue()
                 },
-                enabled = canSend && text.isNotBlank(),
+                enabled = canSend && text.text.isNotBlank(),
             ) { Icon(ArrowUpwardIcon, contentDescription = "Send") }
         }
     }
-    Surface(
-        modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("composer-box"),
-        shape = if (expanded) RoundedCornerShape(24.dp) else CircleShape,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-    ) {
-        // The field has the same place in both shapes, so it keeps its focus as the composer expands.
-        Column(Modifier.padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                MessageField(
-                    text,
-                    onTextChange = { text = it },
-                    Modifier.weight(1f).padding(vertical = if (expanded) 8.dp else 0.dp).onFocusChanged { focused = it.isFocused },
-                )
-                if (!expanded) sendOrStop()
-            }
-            if (expanded) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    leading()
-                    Spacer(Modifier.weight(1f))
-                    sendOrStop()
+    Column(modifier) {
+        val matches = if (commandPrefix == null) emptyList() else commands?.matching(commandPrefix).orEmpty()
+        if (matches.isNotEmpty()) {
+            SlashMenu(
+                matches,
+                onPick = { entry ->
+                    val inserted = "${entry.name} "
+                    text = TextFieldValue(inserted, TextRange(inserted.length))
+                },
+                Modifier.padding(horizontal = 12.dp),
+            )
+        }
+        Surface(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("composer-box"),
+            shape = if (expanded) RoundedCornerShape(24.dp) else CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ) {
+            // The field has the same place in both shapes, so it keeps its focus as the composer expands.
+            Column(Modifier.padding(start = 20.dp, end = 8.dp, top = 8.dp, bottom = 8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MessageField(
+                        text,
+                        onTextChange = { text = it },
+                        Modifier.weight(1f).padding(vertical = if (expanded) 8.dp else 0.dp).onFocusChanged { focused = it.isFocused },
+                    )
+                    if (!expanded) sendOrStop()
+                }
+                if (expanded) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        CommandsButton(enabled = text.text.isEmpty(), onClick = { text = TextFieldValue("/", TextRange(1)) })
+                        leading()
+                        Spacer(Modifier.weight(1f))
+                        sendOrStop()
+                    }
                 }
             }
         }
     }
 }
 
+/** What follows the leading slash of [text] while it is still a command name being typed; null when it is not. */
+private fun commandPrefix(text: String): String? = text.takeIf { it.startsWith("/") && it.none(Char::isWhitespace) }?.drop(1)
+
+/** Starts a command: puts a slash into the empty field, which opens the commands menu. */
+@Composable
+private fun CommandsButton(enabled: Boolean, onClick: () -> Unit) {
+    IconButton(onClick, Modifier.semantics { contentDescription = "Commands" }, enabled = enabled) {
+        Text("/", style = MaterialTheme.typography.titleLarge)
+    }
+}
+
 /** Grows with its text up to six lines, then scrolls. */
 @Composable
-private fun MessageField(text: String, onTextChange: (String) -> Unit, modifier: Modifier) {
+private fun MessageField(text: TextFieldValue, onTextChange: (TextFieldValue) -> Unit, modifier: Modifier) {
     val style = MaterialTheme.typography.bodyLarge
     BasicTextField(
         text,
@@ -115,7 +158,7 @@ private fun MessageField(text: String, onTextChange: (String) -> Unit, modifier:
         maxLines = 6,
         decorationBox = { field ->
             Box(contentAlignment = Alignment.CenterStart) {
-                if (text.isEmpty()) Text("Message Hermes", style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (text.text.isEmpty()) Text("Message Hermes", style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 field()
             }
         },

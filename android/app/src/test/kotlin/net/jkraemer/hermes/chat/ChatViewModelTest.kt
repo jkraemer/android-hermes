@@ -9,6 +9,7 @@ import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.settings.SeenStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -204,5 +205,124 @@ class ChatViewModelTest {
         settle()
 
         assertEquals(listOf("hello"), submitted())
+    }
+
+    private fun methods() = peer.calls.map { it.first }
+
+    @Test
+    fun theCatalogIsLoadedOnceTheChatIsOpen() {
+        val chat = viewModel()
+        settleUntil { chat.commands.value != null }
+
+        assertEquals(listOf("/title", "/compress", "/new", "/context", "/arxiv"), chat.commands.value!!.entries.map { it.name })
+        val live = peer.calls.first { it.first == "commands.catalog" }.second["session_id"]
+        assertEquals("\"live1\"", live.toString())
+    }
+
+    @Test
+    fun unknownSlashTextIsSentAsPrompt() {
+        val chat = viewModel()
+        settleUntil { chat.commands.value != null }
+
+        chat.send("/etc/hosts looks wrong")
+        settleUntil { submitted().isNotEmpty() }
+
+        assertEquals(listOf("/etc/hosts looks wrong"), submitted())
+        assertFalse("slash.exec" in methods())
+    }
+
+    @Test
+    fun globalConfigCommandIsSentAsPrompt() {
+        val chat = viewModel()
+        settleUntil { chat.commands.value != null }
+
+        chat.send("/personality pirate")
+        settleUntil { submitted().isNotEmpty() }
+
+        assertEquals(listOf("/personality pirate"), submitted())
+        assertFalse("slash.exec" in methods())
+    }
+
+    @Test
+    fun knownCommandRunsCommand() {
+        val chat = viewModel()
+        settleUntil { chat.commands.value != null }
+
+        chat.send("/title X")
+        settleUntil { "session.title" in methods() }
+
+        assertEquals("\"X\"", peer.calls.first { it.first == "session.title" }.second["title"].toString())
+        assertTrue(submitted().isEmpty())
+    }
+
+    @Test
+    fun commandWaitsForCatalog() {
+        val gate = CompletableDeferred<Unit>()
+        peer.catalogGate = gate
+        val chat = viewModel()
+        settleUntil { "commands.catalog" in methods() }
+
+        chat.send("/title X")
+        settle()
+        assertFalse("session.title" in methods())
+        assertTrue(submitted().isEmpty())
+
+        gate.complete(Unit)
+        settleUntil { "session.title" in methods() }
+
+        assertEquals(1, methods().count { it == "commands.catalog" })
+        assertTrue(submitted().isEmpty())
+    }
+
+    @Test
+    fun plainTextDoesNotWaitForTheCatalog() {
+        peer.catalogGate = CompletableDeferred()
+        val chat = viewModel()
+        settleUntil { "commands.catalog" in methods() }
+
+        chat.send("hello")
+        settleUntil { submitted().isNotEmpty() }
+
+        assertEquals(listOf("hello"), submitted())
+    }
+
+    @Test
+    fun aCommandIsNeverSentAsPromptWhenTheCatalogCannotBeLoaded() {
+        peer.failing = setOf("commands.catalog")
+        val chat = viewModel()
+        settleUntil { "commands.catalog" in methods() }
+
+        chat.send("/title X")
+        settleUntil { chat.message.value != null }
+
+        assertEquals("Couldn't load commands", chat.message.value)
+        assertFalse("session.title" in methods())
+        assertTrue(submitted().isEmpty())
+    }
+
+    @Test
+    fun openingTheMenuRetriesAFailedCatalogLoad() {
+        peer.failing = setOf("commands.catalog")
+        val chat = viewModel()
+        settleUntil { "commands.catalog" in methods() }
+        settle()
+        assertNull(chat.commands.value)
+
+        peer.failing = emptySet()
+        chat.menuOpened()
+        settleUntil { chat.commands.value != null }
+    }
+
+    @Test
+    fun outcomesBecomeEffects() {
+        val chat = viewModel()
+        settleUntil { chat.commands.value != null }
+
+        chat.send("/new")
+        settleUntil { chat.effect.value != null }
+        assertEquals(ChatEffect.NewChat, chat.effect.value)
+
+        chat.effectHandled()
+        assertNull(chat.effect.value)
     }
 }

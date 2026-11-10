@@ -69,8 +69,15 @@ private suspend fun ChatController.setTitle(title: String): CommandOutcome {
 }
 
 private suspend fun ChatController.runModel(args: String): CommandOutcome {
-    when (val switch = runModelCommand(args)) {
-        is ModelSwitch.NeedsConfirmation -> return CommandOutcome.ConfirmModel(args, switch.message)
+    val switch = runModelCommand(args)
+    if (switch is ModelSwitch.NeedsConfirmation) return CommandOutcome.ConfirmModel(args, switch.message)
+    showModelSwitch(switch)
+    return CommandOutcome.Done
+}
+
+/** Tells the chat what a `/model` switch did; one that still [ModelSwitch.NeedsConfirmation] has nothing to tell yet. */
+fun ChatController.showModelSwitch(switch: ModelSwitch) {
+    when (switch) {
         is ModelSwitch.Applied -> {
             show(ChatItem.Notice("Model: ${switch.model}" + if (switch.scope.isEmpty()) "" else " (${switch.scope})"))
             switch.warning?.let { show(ChatItem.Notice(it)) }
@@ -79,8 +86,8 @@ private suspend fun ChatController.runModel(args: String): CommandOutcome {
             show(ChatItem.Notice("Model: ${switch.model} from the next message"))
             switch.warning?.let { show(ChatItem.Notice(it)) }
         }
+        is ModelSwitch.NeedsConfirmation -> Unit
     }
-    return CommandOutcome.Done
 }
 
 private suspend fun ChatController.runOption(key: String, arg: String) {

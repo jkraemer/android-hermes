@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.mikepenz.markdown.model.State
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,7 +14,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -25,11 +28,29 @@ import net.jkraemer.hermes.core.chat.ChatController
 import net.jkraemer.hermes.core.chat.ChatItem
 import net.jkraemer.hermes.core.chat.ChatState
 import net.jkraemer.hermes.core.chat.RpcPeer
+import net.jkraemer.hermes.core.commands.CommandCatalog
+import net.jkraemer.hermes.core.commands.CommandOutcome
+import net.jkraemer.hermes.core.commands.commandCatalog
+import net.jkraemer.hermes.core.commands.parseSlashCommand
+import net.jkraemer.hermes.core.commands.runCommand
+import net.jkraemer.hermes.core.commands.showModelSwitch
+import net.jkraemer.hermes.core.options.ModelSwitch
+import net.jkraemer.hermes.core.options.runModelCommand
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.settings.SeenStore
 import java.time.Instant
 
 const val NEW_CHAT_TITLE = "New chat"
+
+/** What the screen does after a command ran that the chat itself cannot do. */
+sealed interface ChatEffect {
+    data object OpenOptions : ChatEffect
+    data object NewChat : ChatEffect
+    data class Prefill(val text: String) : ChatEffect
+}
+
+/** A `/model` switch waiting for the user's go-ahead: [message] says why, [retry] makes the switch with it. */
+data class PendingModel(val message: String, val retry: suspend () -> ModelSwitch)
 
 /**
  * One opened chat. [storedSessionId] null starts a new one. Opens the session once the
@@ -67,6 +88,24 @@ class ChatViewModel(
     /** True while the last attempt to open or create the session failed and none is running. */
     private val _openFailed = MutableStateFlow(false)
     val openFailed: StateFlow<Boolean> = _openFailed.asStateFlow()
+
+    private val _commands = MutableStateFlow<CommandCatalog?>(null)
+
+    /** What Hermes offers as slash commands; null until loaded, and after a failed load until the next try. */
+    val commands: StateFlow<CommandCatalog?> = _commands.asStateFlow()
+
+    private val _effect = MutableStateFlow<ChatEffect?>(null)
+
+    /** What a command asks the screen to do; cleared by [effectHandled]. */
+    val effect: StateFlow<ChatEffect?> = _effect.asStateFlow()
+
+    private val _pendingConfirmation = MutableStateFlow<PendingModel?>(null)
+
+    /** A typed `/model` the user has yet to confirm. */
+    val pendingConfirmation: StateFlow<PendingModel?> = _pendingConfirmation.asStateFlow()
+
+    /** The catalogue load in flight or last finished; commands wait for it rather than start another. */
+    private var catalogLoad: Deferred<Unit>? = null
 
     private val markdown = ParsedMarkdown(scope)
 
@@ -116,6 +155,7 @@ class ChatViewModel(
             opened = true
         }
         _openFailed.value = !opened
+        if (opened) loadCatalog()
         if (opened && !pendingSent && pendingMessage != null) {
             pendingSent = true
             send(pendingMessage)
@@ -149,7 +189,65 @@ class ChatViewModel(
         if (title != null && sessionKey != null && sessionKey == state.storedSessionId) _title.value = title
     }
 
-    fun send(text: String) = launchGuarded("Couldn't send") { controller.send(text) }
+    /** Starts loading the catalogue unless a load is in flight; a failed one leaves [commands] as it was. */
+    private fun loadCatalog(): Deferred<Unit> {
+        catalogLoad?.takeIf { it.isActive }?.let { return it }
+        return scope.async {
+            try {
+                _commands.value = peer.commandCatalog(chat.value.liveSessionId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+            }
+        }.also { catalogLoad = it }
+    }
+
+    /** The user opened the slash menu: a catalogue that failed to load is tried again. */
+    fun menuOpened() {
+        if (_commands.value == null) loadCatalog()
+    }
+
+    /** A command is never sent to the model as text, so text shaped like one waits for the catalogue that says whether it is. */
+    fun send(text: String) = launchGuarded("Couldn't send") {
+        val command = parseSlashCommand(text)
+        if (command == null) {
+            controller.send(text)
+            return@launchGuarded
+        }
+        val catalog = _commands.value ?: loadCatalog().let { it.await(); _commands.value }
+        if (catalog == null) {
+            _message.value = "Couldn't load commands"
+        } else if (catalog.canonical(command.name) == null) {
+            controller.send(text)
+        } else {
+            handle(controller.runCommand(command, catalog))
+        }
+    }
+
+    private fun handle(outcome: CommandOutcome) {
+        when (outcome) {
+            CommandOutcome.Done -> Unit
+            CommandOutcome.OpenOptions -> _effect.value = ChatEffect.OpenOptions
+            CommandOutcome.NewChat -> _effect.value = ChatEffect.NewChat
+            is CommandOutcome.Prefill -> _effect.value = ChatEffect.Prefill(outcome.text)
+            is CommandOutcome.ConfirmModel ->
+                _pendingConfirmation.value = PendingModel(outcome.message) { controller.runModelCommand(outcome.args, confirmed = true) }
+        }
+    }
+
+    fun effectHandled() {
+        _effect.value = null
+    }
+
+    /** Makes the switch the user confirmed and tells the chat what it did, as the first attempt would have. */
+    fun confirmModel() {
+        val pending = _pendingConfirmation.getAndUpdate { null } ?: return
+        launchGuarded("Couldn't switch the model") { controller.showModelSwitch(pending.retry()) }
+    }
+
+    fun dismissConfirmation() {
+        _pendingConfirmation.value = null
+    }
 
     fun answerApproval(requestId: String, choice: ApprovalChoice) =
         launchGuarded("Couldn't answer") { controller.answerApproval(requestId, choice) }

@@ -111,6 +111,9 @@ fun JobFeedScreen(
                 onSend = { text -> newest?.let { onReply(it.sessionId, text) } },
                 onStop = {},
                 keyboardVisible = keyboardVisible,
+                prefill = null,
+                onPrefillShown = {},
+                commands = null,
                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
             )
         }

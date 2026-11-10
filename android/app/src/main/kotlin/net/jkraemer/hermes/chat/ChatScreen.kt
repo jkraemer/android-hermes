@@ -102,6 +102,9 @@ fun ChatScreen(
     val title by viewModel.title.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val openFailed by viewModel.openFailed.collectAsStateWithLifecycle()
+    val commands by viewModel.commands.collectAsStateWithLifecycle()
+    val effect by viewModel.effect.collectAsStateWithLifecycle()
+    val pendingConfirmation by viewModel.pendingConfirmation.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val ready = connection == ConnectionState.Ready
 
@@ -114,6 +117,20 @@ fun ChatScreen(
             viewModel.messageShown()
         }
     }
+
+    LaunchedEffect(effect) {
+        when (effect) {
+            ChatEffect.NewChat -> {
+                viewModel.effectHandled()
+                onNewChat()
+            }
+            // Nothing shows the options yet, so the effect is only consumed.
+            ChatEffect.OpenOptions -> viewModel.effectHandled()
+            // The composer takes the text and acknowledges it.
+            is ChatEffect.Prefill, null -> Unit
+        }
+    }
+    pendingConfirmation?.let { ModelConfirmDialog(it, onConfirm = viewModel::confirmModel, onDismiss = viewModel::dismissConfirmation) }
 
     Scaffold(
         modifier = Modifier.testTag("chat-screen").imePadding(),
@@ -141,6 +158,10 @@ fun ChatScreen(
                 onSend = viewModel::send,
                 onStop = viewModel::interrupt,
                 keyboardVisible = keyboardVisible,
+                prefill = (effect as? ChatEffect.Prefill)?.text,
+                onPrefillShown = viewModel::effectHandled,
+                commands = commands,
+                onMenuOpened = viewModel::menuOpened,
                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
             )
         }

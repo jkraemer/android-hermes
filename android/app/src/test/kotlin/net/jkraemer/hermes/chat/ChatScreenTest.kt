@@ -15,6 +15,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -604,6 +605,78 @@ class ChatScreenTest {
 
         compose.waitUntil(10_000) { peer.calls.any { it.first == "session.events.since" } }
         compose.waitUntil(10_000) { compose.onAllNodesWithText("Couldn't open this chat").fetchSemanticsNodes().isEmpty() }
+    }
+
+    /** Sends [text] once the chat is open and its commands are loaded. */
+    private fun sendCommand(text: String) {
+        showOpenChat()
+        compose.waitUntil(10_000) {
+            ShadowLooper.idleMainLooper()
+            viewModel.commands.value != null
+        }
+        compose.runOnIdle { viewModel.send(text) }
+    }
+
+    @Test
+    fun prefillFillsComposer() {
+        peer.results["slash.exec"] = """{"type":"prefill","message":"abc"}"""
+        sendCommand("/context")
+
+        compose.waitUntil(10_000) {
+            ShadowLooper.idleMainLooper()
+            compose.onAllNodesWithText("abc").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.waitUntil(10_000) {
+            ShadowLooper.idleMainLooper()
+            viewModel.effect.value == null
+        }
+        compose.onNodeWithTag("composer").assertTextEquals("abc")
+    }
+
+    @Test
+    fun typedModelConfirmation() {
+        peer.results["config.set"] = """{"confirm_required":true,"confirm_message":"costly"}"""
+        sendCommand("/model gpt-5")
+
+        waitForText("costly")
+        compose.onNodeWithText("Switch").assertIsDisplayed()
+        compose.onNodeWithText("Cancel").assertIsDisplayed()
+
+        peer.results["config.set"] = """{"value":"gpt-5","scope":"session"}"""
+        compose.onNodeWithText("Switch").performClick()
+        compose.waitUntil(10_000) {
+            ShadowLooper.idleMainLooper()
+            peer.calls.count { it.first == "config.set" } == 2
+        }
+        val confirmed = peer.calls.last { it.first == "config.set" }.second
+        assertEquals("gpt-5", (confirmed["value"] as kotlinx.serialization.json.JsonPrimitive).content)
+        assertEquals("true", confirmed["confirm_expensive_model"].toString())
+        waitForText("Model: gpt-5 (session)")
+        compose.onNodeWithText("costly").assertDoesNotExist()
+    }
+
+    @Test
+    fun cancellingTheModelConfirmationSwitchesNothing() {
+        peer.results["config.set"] = """{"confirm_required":true,"confirm_message":"costly"}"""
+        sendCommand("/model gpt-5")
+        waitForText("costly")
+
+        compose.onNodeWithText("Cancel").performClick()
+
+        compose.onNodeWithText("costly").assertDoesNotExist()
+        assertEquals(1, peer.calls.count { it.first == "config.set" })
+    }
+
+    @Test
+    fun noticeIsShown() {
+        peer.results["slash.exec"] = """{"output":"Context: 12k"}"""
+        sendCommand("/context")
+
+        waitForText("Context: 12k")
+        val layouts = mutableListOf<androidx.compose.ui.text.TextLayoutResult>()
+        compose.onNodeWithText("Context: 12k").fetchSemanticsNode().config[androidx.compose.ui.semantics.SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        assertEquals(androidx.compose.material3.lightColorScheme().onSurfaceVariant, layouts.single().layoutInput.style.color)
+        compose.onNodeWithText("Context: 12k").assertIsDisplayed()
     }
 
     private fun SemanticsNodeInteraction.bounds(): Rect = fetchSemanticsNode().boundsInRoot
