@@ -45,8 +45,13 @@ private val GONE = ModelRef("openrouter", "retired/model")
 private fun resumeWith(info: String?) =
     """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":false,"open_requests":[]${info?.let { ""","info":$it""" }.orEmpty()}}"""
 
-private fun info(reasoning: String = "high", fast: Boolean = false, yolo: Boolean = false, model: String = FLASH.model) =
-    """{"model":"$model","provider":"openrouter","reasoning_effort":"$reasoning","fast":$fast,"yolo":$yolo}"""
+private fun info(
+    reasoning: String = "high",
+    fast: Boolean = false,
+    yolo: Boolean = false,
+    model: String = FLASH.model,
+    approvalMode: String = "manual",
+) = """{"model":"$model","provider":"openrouter","reasoning_effort":"$reasoning","fast":$fast,"yolo":$yolo,"approval_mode":"$approvalMode"}"""
 
 /** Flash can run fast and cannot switch reasoning off; Sonnet can switch it off; Mini does no reasoning. */
 private const val MODEL_OPTIONS = """
@@ -336,20 +341,39 @@ class SessionOptionsSheetTest {
         compose.onNodeWithText("YOLO is on for every session in Hermes' config").assertDoesNotExist()
     }
 
+    private val globalYoloCaption = "YOLO is on for every session in Hermes' config"
+
     @Test
     fun globalYoloIsExplained() {
-        show(info(yolo = true))
+        show(info(yolo = true, approvalMode = "off"))
         openSheet()
         waitForText("YOLO (skip approvals)")
-        peer.results["config.set"] = """{"value":"0"}"""
+        peer.results["config.set"] = """{"key":"yolo","value":"0","scope":"session"}"""
+        // Hermes sends session.info, reporting YOLO on because of its approvals mode, before it answers the call.
+        peer.event("session.info", info(yolo = true, approvalMode = "off"))
+        ShadowLooper.idleMainLooper()
 
         compose.onNodeWithText("YOLO (skip approvals)").performClick()
-        waitUntil { configSets().size == 1 && viewModel.chat.value.options?.yolo == false }
-        compose.onNodeWithText("YOLO is on for every session in Hermes' config").assertDoesNotExist()
+        waitUntil { configSets().size == 1 }
+        compose.waitForIdle()
 
-        // Hermes reports YOLO on as long as its global approvals mode is off.
-        peer.event("session.info", info(yolo = true))
-        waitForText("YOLO is on for every session in Hermes' config")
+        compose.onNodeWithText(globalYoloCaption).assertExists()
+        compose.onNodeWithText("YOLO (skip approvals)").assertIsOn()
+    }
+
+    @Test
+    fun globalYoloIsExplainedWithoutSessionInfo() {
+        show(info(yolo = true, approvalMode = "off"))
+        openSheet()
+        waitForText("YOLO (skip approvals)")
+        compose.onNodeWithText(globalYoloCaption).assertExists()
+        peer.results["config.set"] = """{"key":"yolo","value":"0","scope":"session"}"""
+
+        compose.onNodeWithText("YOLO (skip approvals)").performClick()
+        waitUntil { configSets().size == 1 }
+        compose.waitForIdle()
+
+        compose.onNodeWithText(globalYoloCaption).assertExists()
         compose.onNodeWithText("YOLO (skip approvals)").assertIsOn()
     }
 
@@ -379,6 +403,21 @@ class SessionOptionsSheetTest {
 
         compose.onNodeWithText("YOLO (skip approvals)").performClick()
         waitForText("Couldn't change YOLO: session not found")
+    }
+
+    @Test
+    fun failedConfirmedSwitchShowsTheSheetsMessage() {
+        show()
+        openSheet()
+        waitForText(SONNET.model)
+        peer.results["config.set"] = """{"confirm_required":true,"confirm_message":"costly"}"""
+        compose.onNodeWithText(SONNET.model).performClick()
+        waitForText("costly")
+
+        peer.refusing = setOf("config.set")
+        compose.onNodeWithText("Switch").performClick()
+
+        waitForText("Couldn't change the model: session not found")
     }
 
     @Test

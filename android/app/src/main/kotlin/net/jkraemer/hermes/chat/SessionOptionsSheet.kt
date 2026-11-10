@@ -76,7 +76,6 @@ internal fun SessionOptionsSheet(viewModel: ChatViewModel, onOpenFavorites: () -
     val catalog by viewModel.modelCatalog.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
     val deferred by viewModel.switchDeferred.collectAsStateWithLifecycle()
-    val globalYolo by viewModel.globalYolo.collectAsStateWithLifecycle()
     LaunchedEffect(Unit) { viewModel.loadModelCatalog() }
 
     ModalBottomSheet(onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
@@ -102,7 +101,7 @@ internal fun SessionOptionsSheet(viewModel: ChatViewModel, onOpenFavorites: () -
             }
             if (capabilities.fast) SwitchRow("Fast mode", options.fast, viewModel::setFast)
             SwitchRow("YOLO (skip approvals)", options.yolo, viewModel::setYolo)
-            if (globalYolo) Note("YOLO is on for every session in Hermes' config")
+            if (options.approvalsOff) Note("YOLO is on for every session in Hermes' config")
         }
     }
 }

@@ -8,8 +8,6 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.StateFlow
@@ -127,16 +125,6 @@ class ChatViewModel(
 
     /** Whether the last model switch from the options sheet waits for the running turn to end. */
     val switchDeferred: StateFlow<Boolean> = _switchDeferred.asStateFlow()
-
-    /** Whether the user switched YOLO off for this session. */
-    private val yoloSwitchedOff = MutableStateFlow(false)
-
-    /**
-     * Whether YOLO is on although the user switched it off for this session: Hermes reports YOLO on while its global
-     * approvals mode is off, whatever the session's own flag says, so the session cannot be made to ask.
-     */
-    val globalYolo: StateFlow<Boolean> = combine(yoloSwitchedOff, chat.map { it.options?.yolo == true }) { off, on -> off && on }
-        .stateIn(scope, SharingStarted.Eagerly, false)
 
     /** The catalogue load in flight or last finished; commands wait for it rather than start another. */
     private var catalogLoad: Deferred<Unit>? = null
@@ -284,10 +272,7 @@ class ChatViewModel(
 
     fun setFast(on: Boolean) = launchGuarded("Couldn't change fast mode") { controller.setFast(on) }
 
-    fun setYolo(on: Boolean) = launchGuarded("Couldn't change YOLO") {
-        controller.setYolo(on)
-        yoloSwitchedOff.value = !on
-    }
+    fun setYolo(on: Boolean) = launchGuarded("Couldn't change YOLO") { controller.setYolo(on) }
 
     /** Tells the options sheet what became of a switch; a switch that needs the user's go-ahead waits for it, and [confirmed] makes it then. */
     private fun reportSwitch(switch: ModelSwitch, confirmed: suspend () -> ModelSwitch) {
@@ -309,7 +294,7 @@ class ChatViewModel(
     /** Makes the switch the user confirmed and tells the chat what it did, as the first attempt would have. */
     fun confirmModel() {
         val pending = _pendingConfirmation.getAndUpdate { null } ?: return
-        launchGuarded("Couldn't switch the model") {
+        launchGuarded(if (pending.inChat) "Couldn't switch the model" else "Couldn't change the model") {
             val switch = pending.retry()
             if (pending.inChat) controller.showModelSwitch(switch) else reportSwitch(switch, pending.retry)
         }

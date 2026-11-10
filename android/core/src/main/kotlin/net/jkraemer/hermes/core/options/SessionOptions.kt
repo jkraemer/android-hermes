@@ -9,8 +9,18 @@ import kotlinx.serialization.json.put
 import net.jkraemer.hermes.core.chat.ChatController
 import net.jkraemer.hermes.core.chat.ChatInput
 
-/** What a chat session runs on. [reasoning] is "" for Hermes' default and "none" for off. */
-data class SessionOptions(val model: String, val provider: String, val reasoning: String, val fast: Boolean, val yolo: Boolean)
+/**
+ * What a chat session runs on. [reasoning] is "" for Hermes' default and "none" for off. [yolo] is what Hermes
+ * applies: on when the session's flag is, or when [approvalsOff] (Hermes' global approvals mode) is.
+ */
+data class SessionOptions(
+    val model: String,
+    val provider: String,
+    val reasoning: String,
+    val fast: Boolean,
+    val yolo: Boolean,
+    val approvalsOff: Boolean = false,
+)
 
 /** The fields of [SessionOptions] a call's result tells; null leaves a field as it was. */
 data class OptionsPatch(
@@ -33,6 +43,7 @@ fun sessionOptionsFrom(info: JsonObject): SessionOptions? {
         reasoning = info.text("reasoning_effort").orEmpty(),
         fast = info.flag("fast"),
         yolo = info.flag("yolo"),
+        approvalsOff = info.text("approval_mode") == "off",
     )
 }
 
@@ -41,7 +52,8 @@ internal fun SessionOptions.patched(patch: OptionsPatch) = SessionOptions(
     provider = patch.provider ?: provider,
     reasoning = patch.reasoning ?: reasoning,
     fast = patch.fast ?: fast,
-    yolo = patch.yolo ?: yolo,
+    yolo = patch.yolo?.let { it || approvalsOff } ?: yolo,
+    approvalsOff = approvalsOff,
 )
 
 sealed interface ModelSwitch {

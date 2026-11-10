@@ -25,4 +25,13 @@ class SessionOptionsTest {
 
         assertEquals(SessionOptions("a", "", "", fast = false, yolo = false), sessionOptionsFrom(info))
     }
+
+    @Test
+    fun approvalModeOffMeansApprovalsOff() {
+        val info = obj("""{"model":"a","yolo":true,"approval_mode":"off"}""")
+
+        assertEquals(true, sessionOptionsFrom(info)?.approvalsOff)
+        assertEquals(false, sessionOptionsFrom(obj("""{"model":"a","approval_mode":"manual"}"""))?.approvalsOff)
+        assertEquals(false, sessionOptionsFrom(obj("""{"model":"a"}"""))?.approvalsOff)
+    }
 }

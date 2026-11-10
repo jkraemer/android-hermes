@@ -281,4 +281,22 @@ class ChatControllerOptionsTest {
 
         assertEquals(BASE, options(chat))
     }
+
+    @Test
+    fun yoloStaysOnWhileApprovalsAreOff() = test(info = """{"model":"a","provider":"p","reasoning_effort":"","fast":false,"yolo":true,"approval_mode":"off"}""") { peer, chat ->
+        peer.on("config.set", """{"key":"yolo","value":"0","scope":"session"}""")
+        chat.setYolo(false)
+        assertEquals(true, options(chat)?.yolo)
+
+        chat.runOptionCommand("yolo", "off")
+        assertEquals(true, options(chat)?.yolo)
+    }
+
+    @Test
+    fun yoloTurnsOffWhenApprovalsAreNotOff() = test(info = """{"model":"a","provider":"p","reasoning_effort":"","fast":false,"yolo":true,"approval_mode":"manual"}""") { peer, chat ->
+        peer.on("config.set", """{"key":"yolo","value":"0","scope":"session"}""")
+        chat.setYolo(false)
+
+        assertEquals(false, options(chat)?.yolo)
+    }
 }
