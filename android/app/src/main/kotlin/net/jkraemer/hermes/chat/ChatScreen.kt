@@ -57,7 +57,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
@@ -172,7 +171,8 @@ fun ChatScreen(
                 slashMenu = true,
                 onMenuOpened = viewModel::menuOpened,
                 leading = { ModelChip(chat.options, enabled = ready, onClick = { optionsOpen = true }) },
-                modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
+                onBoxHeightChanged = { composerHeight = with(density) { it.toDp() } },
+                modifier = Modifier.align(Alignment.BottomCenter),
             )
         }
     }

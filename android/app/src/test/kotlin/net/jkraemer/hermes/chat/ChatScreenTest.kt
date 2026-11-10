@@ -152,6 +152,27 @@ class ChatScreenTest {
         compose.onNode(hasText("Reply 6 paragraph 6", substring = true)).assertIsDisplayed()
     }
 
+    private fun lastReplyTop() =
+        compose.onNode(hasText("Reply 6 paragraph 6", substring = true)).fetchSemanticsNode().positionInRoot.y
+
+    @Test
+    fun theSlashMenuOverlaysTheListWithoutMovingIt() {
+        showLongChat(6)
+        compose.waitUntil(10_000) { viewModel.commands.value != null }
+        compose.onNodeWithTag("composer").requestFocus()
+        compose.waitForIdle()
+        val before = lastReplyTop()
+
+        compose.onNodeWithTag("composer").performTextInput("/")
+        compose.waitForIdle()
+        compose.onNodeWithText("/compress").assertIsDisplayed()
+        assertEquals(before, lastReplyTop(), 0.5f)
+
+        compose.onNodeWithTag("composer").performTextInput("c")
+        compose.waitForIdle()
+        assertEquals(before, lastReplyTop(), 0.5f)
+    }
+
     /** Paragraphs [from]..[to] of reply 7, which is several screens long once complete. */
     private fun longReply(from: Int, to: Int) =
         (from..to).joinToString("\n\n") { "Reply 7 paragraph $it says something **useful** about the question, long enough to wrap over several lines on a phone screen." }

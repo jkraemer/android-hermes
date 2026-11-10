@@ -1,5 +1,6 @@
 package net.jkraemer.hermes.chat
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
@@ -59,6 +61,8 @@ internal fun Composer(
     slashMenu: Boolean,
     modifier: Modifier = Modifier,
     onMenuOpened: () -> Unit = {},
+    /** Reports the height in pixels of the card or pill alone: the commands menu overlays what lies above and is not part of it. */
+    onBoxHeightChanged: (Int) -> Unit = {},
     leading: @Composable RowScope.() -> Unit = {},
 ) {
     var text by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
@@ -95,8 +99,11 @@ internal fun Composer(
             ) { Icon(ArrowUpwardIcon, contentDescription = "Send") }
         }
     }
+    // Back closes the menu and keeps the text; typing on opens it again.
+    var menuClosedFor by remember { mutableStateOf<String?>(null) }
+    val matches = if (commandPrefix == null || menuClosedFor == text.text) emptyList() else commands?.matching(commandPrefix).orEmpty()
+    BackHandler(matches.isNotEmpty()) { menuClosedFor = text.text }
     Column(modifier) {
-        val matches = if (commandPrefix == null) emptyList() else commands?.matching(commandPrefix).orEmpty()
         if (matches.isNotEmpty()) {
             SlashMenu(
                 matches,
@@ -104,11 +111,12 @@ internal fun Composer(
                     val inserted = "${entry.name} "
                     text = TextFieldValue(inserted, TextRange(inserted.length))
                 },
-                Modifier.padding(horizontal = 12.dp),
+                // The card keeps its height in a short window; the menu gives way.
+                Modifier.weight(1f, fill = false).padding(horizontal = 12.dp),
             )
         }
         Surface(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp).testTag("composer-box"),
+            Modifier.fillMaxWidth().onSizeChanged { onBoxHeightChanged(it.height) }.padding(horizontal = 12.dp, vertical = 8.dp).testTag("composer-box"),
             shape = if (expanded) RoundedCornerShape(24.dp) else CircleShape,
             color = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
