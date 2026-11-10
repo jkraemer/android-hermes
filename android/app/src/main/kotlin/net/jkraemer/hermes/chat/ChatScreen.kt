@@ -108,15 +108,17 @@ fun ChatScreen(
     val effect by viewModel.effect.collectAsStateWithLifecycle()
     val pendingConfirmation by viewModel.pendingConfirmation.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    val sheetSnackbar = remember { SnackbarHostState() }
     val ready = connection == ConnectionState.Ready
     var optionsOpen by rememberSaveable { mutableStateOf(false) }
 
     val started by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     LaunchedEffect(started.isAtLeast(Lifecycle.State.STARTED)) { viewModel.setVisible(started.isAtLeast(Lifecycle.State.STARTED)) }
     LaunchedEffect(chat.storedSessionId) { chat.storedSessionId?.let(onStoredSessionId) }
+    // The options sheet covers the screen's snackbar, so while it is open it shows the messages itself.
     LaunchedEffect(message) {
         message?.let {
-            snackbar.showSnackbar(it)
+            (if (optionsOpen) sheetSnackbar else snackbar).showSnackbar(it)
             viewModel.messageShown()
         }
     }
@@ -135,7 +137,7 @@ fun ChatScreen(
             is ChatEffect.Prefill, null -> Unit
         }
     }
-    if (optionsOpen) SessionOptionsSheet(viewModel, onOpenFavorites, onDismiss = { optionsOpen = false })
+    if (optionsOpen) SessionOptionsSheet(viewModel, sheetSnackbar, onOpenFavorites, onDismiss = { optionsOpen = false })
     pendingConfirmation?.let { ModelConfirmDialog(it, onConfirm = viewModel::confirmModel, onDismiss = viewModel::dismissConfirmation) }
 
     Scaffold(

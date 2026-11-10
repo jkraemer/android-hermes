@@ -19,6 +19,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,11 +34,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import net.jkraemer.hermes.core.options.ModelCapabilities
 import net.jkraemer.hermes.core.options.ModelRef
 import net.jkraemer.hermes.core.options.REASONING_LEVELS
 import net.jkraemer.hermes.core.options.SessionOptions
 import net.jkraemer.hermes.core.options.favoritesOffered
+import net.jkraemer.hermes.core.rpc.ConnectionState
 
 /** The model's id without its vendor prefix, and the reasoning level unless it is Hermes' default. */
 private fun SessionOptions.chipText(): String {
@@ -63,45 +65,51 @@ private val REASONING_LABELS = mapOf("none" to "Off", "xhigh" to "XHigh")
 
 private fun reasoningLabel(level: String) = REASONING_LABELS[level] ?: level.replaceFirstChar(Char::uppercase)
 
-private val UNLOADED_CATALOG_CAPABILITIES = ModelCapabilities(reasoning = true, canDisableReasoning = true, fast = false)
-
 /**
  * What the session runs on, for [viewModel]'s chat only: its model among the favorites that Hermes offers
- * ([onOpenFavorites] chooses them), its reasoning level, fast mode and YOLO.
+ * ([onOpenFavorites] chooses them), its reasoning level, fast mode and YOLO. The choices are off while the
+ * connection is not ready. The chat's messages show in [snackbar], inside the sheet, because the sheet covers
+ * the screen's own.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun SessionOptionsSheet(viewModel: ChatViewModel, onOpenFavorites: () -> Unit, onDismiss: () -> Unit) {
+internal fun SessionOptionsSheet(viewModel: ChatViewModel, snackbar: SnackbarHostState, onOpenFavorites: () -> Unit, onDismiss: () -> Unit) {
     val chat by viewModel.chat.collectAsStateWithLifecycle()
     val catalog by viewModel.modelCatalog.collectAsStateWithLifecycle()
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
+    val catalogFailed by viewModel.modelCatalogFailed.collectAsStateWithLifecycle()
     val deferred by viewModel.switchDeferred.collectAsStateWithLifecycle()
+    val enabled = viewModel.connection.collectAsStateWithLifecycle().value == ConnectionState.Ready
     LaunchedEffect(Unit) { viewModel.loadModelCatalog() }
 
     ModalBottomSheet(onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         val options = chat.options ?: return@ModalBottomSheet
         val current = ModelRef(options.provider, options.model)
-        val capabilities = catalog?.capabilities(current) ?: UNLOADED_CATALOG_CAPABILITIES
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp).testTag("options-sheet"),
-            verticalArrangement = spacedBy(8.dp),
-        ) {
-            Heading("Model")
-            val offered = catalog?.let { favoritesOffered(favorites, it) }
-            when {
-                offered == null -> CircularProgressIndicator(Modifier.size(24.dp).align(Alignment.CenterHorizontally))
-                offered.isEmpty() -> NoFavorites(favorites.isEmpty(), onOpenFavorites)
-                else -> offered.forEach { ModelRow(it, selected = it == current, onClick = { viewModel.switchModel(it) }) }
-            }
-            if (deferred) Note("Applies from the next message")
+        val capabilities = catalog?.capabilities(current)
+        Column(Modifier.testTag("options-sheet")) {
+            Column(
+                Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 24.dp),
+                verticalArrangement = spacedBy(8.dp),
+            ) {
+                Heading("Model")
+                val offered = catalog?.let { favoritesOffered(favorites, it) }
+                when {
+                    offered != null && offered.isEmpty() -> NoFavorites(favorites.isEmpty(), onOpenFavorites)
+                    offered != null -> offered.forEach { ModelRow(it, selected = it == current, enabled, onClick = { viewModel.switchModel(it) }) }
+                    catalogFailed -> CatalogFailed(enabled, viewModel::loadModelCatalog)
+                    else -> CircularProgressIndicator(Modifier.size(24.dp).align(Alignment.CenterHorizontally))
+                }
+                if (deferred) Note("Applies from the next message")
 
-            if (capabilities.reasoning) {
-                Heading("Reasoning")
-                ReasoningChoices(options.reasoning, capabilities.canDisableReasoning, viewModel::setReasoning)
+                if (capabilities?.reasoning == true) {
+                    Heading("Reasoning")
+                    ReasoningChoices(options.reasoning, capabilities.canDisableReasoning, enabled, viewModel::setReasoning)
+                }
+                if (capabilities?.fast == true) SwitchRow("Fast mode", options.fast, enabled, viewModel::setFast)
+                SwitchRow("YOLO (skip approvals)", options.yolo, enabled, viewModel::setYolo)
+                if (options.approvalsOff) Note("YOLO is on for every session in Hermes' config")
             }
-            if (capabilities.fast) SwitchRow("Fast mode", options.fast, viewModel::setFast)
-            SwitchRow("YOLO (skip approvals)", options.yolo, viewModel::setYolo)
-            if (options.approvalsOff) Note("YOLO is on for every session in Hermes' config")
+            SnackbarHost(snackbar)
         }
     }
 }
@@ -117,9 +125,9 @@ private fun Note(text: String) {
 }
 
 @Composable
-private fun ModelRow(ref: ModelRef, selected: Boolean, onClick: () -> Unit) {
+private fun ModelRow(ref: ModelRef, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth().selectable(selected, role = Role.RadioButton, onClick = onClick),
+        Modifier.fillMaxWidth().selectable(selected, enabled, Role.RadioButton, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = spacedBy(8.dp),
     ) {
@@ -138,24 +146,30 @@ private fun NoFavorites(noneChosen: Boolean, onOpenFavorites: () -> Unit) {
     TextButton(onOpenFavorites) { Text("Choose favorites") }
 }
 
+@Composable
+private fun CatalogFailed(enabled: Boolean, onRetry: () -> Unit) {
+    Text("Couldn't load models", color = MaterialTheme.colorScheme.error)
+    TextButton(onRetry, enabled = enabled) { Text("Retry") }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReasoningChoices(selected: String, canDisable: Boolean, onChoose: (String) -> Unit) {
+private fun ReasoningChoices(selected: String, canDisable: Boolean, enabled: Boolean, onChoose: (String) -> Unit) {
     FlowRow(horizontalArrangement = spacedBy(8.dp)) {
         for (level in REASONING_LEVELS) {
             if (level == "none" && !canDisable) continue
-            FilterChip(selected == level, onClick = { onChoose(level) }, label = { Text(reasoningLabel(level)) })
+            FilterChip(selected == level, onClick = { onChoose(level) }, enabled = enabled, label = { Text(reasoningLabel(level)) })
         }
     }
 }
 
 @Composable
-private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun SwitchRow(label: String, checked: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().toggleable(checked, role = Role.Switch, onValueChange = onChange),
+        Modifier.fillMaxWidth().toggleable(checked, enabled, Role.Switch, onValueChange = onChange),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-        Switch(checked, onCheckedChange = null)
+        Switch(checked, onCheckedChange = null, enabled = enabled)
     }
 }

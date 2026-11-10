@@ -8,8 +8,10 @@ import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isNotEnabled
 import androidx.compose.ui.test.isSelected
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -17,6 +19,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.assertIsDisplayed
@@ -42,8 +45,8 @@ private val FLASH = ModelRef("openrouter", "deepseek/deepseek-v4-flash")
 private val SONNET = ModelRef("openrouter", "anthropic/claude-sonnet-5")
 private val GONE = ModelRef("openrouter", "retired/model")
 
-private fun resumeWith(info: String?) =
-    """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":false,"open_requests":[]${info?.let { ""","info":$it""" }.orEmpty()}}"""
+private fun resumeWith(info: String?, running: Boolean = false) =
+    """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":$running,"open_requests":[]${info?.let { ""","info":$it""" }.orEmpty()}}"""
 
 private fun info(
     reasoning: String = "high",
@@ -73,8 +76,8 @@ class SessionOptionsSheetTest {
     private var favoriteShortcuts = 0
     private lateinit var viewModel: ChatViewModel
 
-    private fun show(info: String? = info()) {
-        peer.resume = resumeWith(info)
+    private fun show(info: String? = info(), running: Boolean = false) {
+        peer.resume = resumeWith(info, running)
         peer.results["model.options"] = MODEL_OPTIONS
         peer.results["config.set"] = """{"value":"high"}"""
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-sheet-test", Context.MODE_PRIVATE)
@@ -395,13 +398,13 @@ class SessionOptionsSheetTest {
         compose.onNodeWithText(SONNET.model).performClick()
         waitForText("Couldn't change the model: session not found")
 
-        compose.onNodeWithText("Low").performClick()
+        compose.onNodeWithText("Low").performScrollTo().performClick()
         waitForText("Couldn't change reasoning: session not found")
 
-        compose.onNodeWithText("Fast mode").performClick()
+        compose.onNodeWithText("Fast mode").performScrollTo().performClick()
         waitForText("Couldn't change fast mode: session not found")
 
-        compose.onNodeWithText("YOLO (skip approvals)").performClick()
+        compose.onNodeWithText("YOLO (skip approvals)").performScrollTo().performClick()
         waitForText("Couldn't change YOLO: session not found")
     }
 
@@ -430,5 +433,84 @@ class SessionOptionsSheetTest {
         compose.onNodeWithText(SONNET.model).performClick()
 
         waitForText("big context")
+    }
+
+    /** The node with [text] that lies inside the sheet's own content, not behind it in the chat screen. */
+    private fun inSheet(text: String) = hasText(text) and hasAnyAncestor(hasTestTag("options-sheet"))
+
+    private fun waitForTextInSheet(text: String) =
+        waitUntil { compose.onAllNodes(inSheet(text)).fetchSemanticsNodes().isNotEmpty() }
+
+    @Test
+    fun failuresAndWarningsAreShownInsideTheSheet() {
+        show()
+        openSheet()
+        waitForText(SONNET.model)
+        peer.refusing = setOf("config.set")
+
+        compose.onNodeWithText(SONNET.model).performClick()
+        waitForTextInSheet("Couldn't change the model: session not found")
+
+        peer.refusing = emptySet()
+        peer.results["config.set"] = """{"value":"${SONNET.model}","warning":"big context","scope":"session"}"""
+        compose.onNodeWithText(SONNET.model).performClick()
+        waitForTextInSheet("big context")
+    }
+
+    @Test
+    fun aFailedModelLoadOffersRetry() {
+        peer.refusing = setOf("model.options")
+        show()
+        openSheet()
+        waitForText("Couldn't load models")
+        compose.onNodeWithText("Reasoning").assertDoesNotExist()
+
+        peer.refusing = emptySet()
+        compose.onNodeWithText("Retry").performClick()
+
+        waitForText(SONNET.model)
+        compose.onNodeWithText("Couldn't load models").assertDoesNotExist()
+    }
+
+    @Test
+    fun noReasoningChoicesBeforeTheModelsHaveLoaded() {
+        peer.refusing = setOf("model.options")
+        show()
+        openSheet()
+        waitForText("Couldn't load models")
+
+        compose.onNodeWithText("Off").assertDoesNotExist()
+        compose.onNodeWithText("High").assertDoesNotExist()
+    }
+
+    @Test
+    fun controlsAreDisabledWhileNotConnected() {
+        show(info(model = SONNET.model))
+        openSheet()
+        waitForText("XHigh")
+        compose.onNodeWithText("YOLO (skip approvals)").assertIsEnabled()
+
+        peer.state.value = ConnectionState.Connecting
+        waitUntil { compose.onAllNodes(hasText("YOLO (skip approvals)") and isNotEnabled()).fetchSemanticsNodes().isNotEmpty() }
+
+        compose.onNodeWithText(FLASH.model).assertIsNotEnabled()
+        compose.onNodeWithText("Low").assertIsNotEnabled()
+        compose.onNodeWithText("Off").assertIsNotEnabled()
+    }
+
+    @Test
+    fun deferredNoteGoesOnceTheNextTurnStarts() {
+        show(running = true)
+        openSheet()
+        waitForText(SONNET.model)
+        peer.results["config.set"] = """{"value":"${SONNET.model}","deferred":true}"""
+        compose.onNodeWithText(SONNET.model).performClick()
+        waitForText("Applies from the next message")
+
+        peer.event("message.complete", """{"text":"done"}""")
+        waitUntil { !viewModel.chat.value.running }
+        viewModel.send("next")
+
+        waitUntil { compose.onAllNodesWithText("Applies from the next message").fetchSemanticsNodes().isEmpty() }
     }
 }

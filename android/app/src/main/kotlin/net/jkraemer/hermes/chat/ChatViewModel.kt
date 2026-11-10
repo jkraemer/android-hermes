@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -121,9 +122,14 @@ class ChatViewModel(
     /** The models Hermes offers this session; null until the options sheet has loaded them. */
     val modelCatalog: StateFlow<ModelCatalog?> = _modelCatalog.asStateFlow()
 
+    private val _modelCatalogFailed = MutableStateFlow(false)
+
+    /** Whether the last attempt to load [modelCatalog] failed. */
+    val modelCatalogFailed: StateFlow<Boolean> = _modelCatalogFailed.asStateFlow()
+
     private val _switchDeferred = MutableStateFlow(false)
 
-    /** Whether the last model switch from the options sheet waits for the running turn to end. */
+    /** Whether the last model switch from the options sheet waits for the running turn to end; Hermes applies it when the next turn starts. */
     val switchDeferred: StateFlow<Boolean> = _switchDeferred.asStateFlow()
 
     /** The catalogue load in flight or last finished; commands wait for it rather than start another. */
@@ -146,6 +152,7 @@ class ChatViewModel(
         scope.launch { openWhenReady() }
         scope.launch { chat.collect(::onChatChanged) }
         scope.launch { chat.collect { parseFinishedReplies(it.items) } }
+        scope.launch { chat.map { it.running }.distinctUntilChanged().collect { running -> if (running) _switchDeferred.value = false } }
         scope.launch { markSeenWhileVisible() }
         scope.launch { peer.events.collect { event -> if (event.type in TITLE_EVENTS) onTitleEvent(event.type, event.payload) } }
     }
@@ -260,7 +267,16 @@ class ChatViewModel(
     /** The options sheet opened: asks Hermes what it offers this session, keeping what it last offered meanwhile. */
     fun loadModelCatalog() {
         _switchDeferred.value = false
-        launchGuarded("Couldn't load the models") { _modelCatalog.value = peer.modelCatalog(chat.value.liveSessionId) }
+        _modelCatalogFailed.value = false
+        scope.launch {
+            try {
+                _modelCatalog.value = peer.modelCatalog(chat.value.liveSessionId)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _modelCatalogFailed.value = true
+            }
+        }
     }
 
     fun switchModel(ref: ModelRef) = launchGuarded("Couldn't change the model") {
@@ -277,10 +293,10 @@ class ChatViewModel(
     /** Tells the options sheet what became of a switch; a switch that needs the user's go-ahead waits for it, and [confirmed] makes it then. */
     private fun reportSwitch(switch: ModelSwitch, confirmed: suspend () -> ModelSwitch) {
         when (switch) {
-            is ModelSwitch.Applied -> _message.value = switch.warning
+            is ModelSwitch.Applied -> switch.warning?.let { _message.value = it }
             is ModelSwitch.Deferred -> {
                 _switchDeferred.value = true
-                _message.value = switch.warning
+                switch.warning?.let { _message.value = it }
             }
             is ModelSwitch.NeedsConfirmation ->
                 _pendingConfirmation.value = PendingModel(switch.message, inChat = false, confirmed)

@@ -5,6 +5,7 @@ import android.os.Looper
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import net.jkraemer.hermes.core.chat.ApprovalChoice
+import net.jkraemer.hermes.core.options.ModelRef
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.settings.SeenStore
 import org.junit.Assert.assertEquals
@@ -324,5 +325,59 @@ class ChatViewModelTest {
 
         chat.effectHandled()
         assertNull(chat.effect.value)
+    }
+
+    private val flash = ModelRef("openrouter", "deepseek/deepseek-v4-flash")
+
+    @Test
+    fun aCleanSwitchKeepsAnErrorShowing() {
+        val chat = viewModel()
+        settleUntil { chat.chat.value.liveSessionId != null }
+        peer.refusing = setOf("config.set")
+        chat.setFast(true)
+        settleUntil { chat.message.value != null }
+        val error = chat.message.value
+
+        peer.refusing = emptySet()
+        peer.results["config.set"] = """{"value":"${flash.model}","scope":"session"}"""
+        chat.switchModel(flash)
+        settleUntil { peer.calls.count { it.first == "config.set" } == 2 }
+        settle()
+
+        assertEquals(error, chat.message.value)
+    }
+
+    @Test
+    fun aFailedModelLoadIsRecordedAndTriedAgain() {
+        val chat = viewModel()
+        settleUntil { chat.chat.value.liveSessionId != null }
+        peer.refusing = setOf("model.options")
+
+        chat.loadModelCatalog()
+        settleUntil { chat.modelCatalogFailed.value }
+        assertNull(chat.modelCatalog.value)
+
+        peer.refusing = emptySet()
+        peer.results["model.options"] = """{"providers":[]}"""
+        chat.loadModelCatalog()
+        settleUntil { chat.modelCatalog.value != null }
+        assertFalse(chat.modelCatalogFailed.value)
+    }
+
+    @Test
+    fun aDeferredSwitchIsNoLongerNotedOnceTheNextTurnStarts() {
+        peer.resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":true,"open_requests":[]}"""
+        peer.results["config.set"] = """{"value":"${flash.model}","deferred":true}"""
+        val chat = viewModel()
+        settleUntil { chat.chat.value.running }
+        chat.switchModel(flash)
+        settleUntil { chat.switchDeferred.value }
+
+        peer.event("message.complete", """{"text":"done"}""")
+        settleUntil { !chat.chat.value.running }
+        assertTrue(chat.switchDeferred.value)
+
+        chat.send("next")
+        settleUntil { !chat.switchDeferred.value }
     }
 }
