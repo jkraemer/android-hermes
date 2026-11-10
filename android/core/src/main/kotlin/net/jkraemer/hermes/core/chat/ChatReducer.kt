@@ -17,25 +17,26 @@ fun reduce(state: ChatState, input: ChatInput): ChatState = when (input) {
     is ChatInput.Event -> reduceEvent(state, input.event)
     is ChatInput.Request -> reduceRequest(state, input.request, input.receivedAt, input.approvalTimeoutSeconds)
     is ChatInput.Answered -> state.updateCard(input.requestId) { CardStatus.Answered(input.label) }
-    is ChatInput.OpenRequests -> reconcileCards(state, input.ids, input.known)
+    is ChatInput.OpenRequests -> reconcileCards(state, input.ids, input.cardsAtSend)
 }
 
 /**
  * Hermes emits nothing when another client answers a request, so the list of open requests is
  * the only truth: an open card missing from it was answered elsewhere, and a card this client
- * marked answered but that is still listed never got its answer through.
+ * had marked answered before the call was sent but that is still listed never got its answer
+ * through. An answer given after the send may have reached Hermes after it took the list.
  */
-private fun reconcileCards(state: ChatState, openIds: Set<String>, known: Set<String>): ChatState =
+private fun reconcileCards(state: ChatState, openIds: Set<String>, cardsAtSend: Map<String, CardStatus>): ChatState =
     state.copy(items = state.items.map { item ->
+        val atSend = item.cardRequestId?.let(cardsAtSend::get) ?: return@map item
         when {
-            item.cardRequestId !in known -> item
             item is ChatItem.Approval && item.requestId !in openIds && item.status == CardStatus.Open ->
                 item.copy(status = CardStatus.Cancelled(ANSWERED_ELSEWHERE))
             item is ChatItem.Clarify && item.requestId !in openIds && item.status == CardStatus.Open ->
                 item.copy(status = CardStatus.Cancelled(ANSWERED_ELSEWHERE))
-            item is ChatItem.Approval && item.requestId in openIds && item.status is CardStatus.Answered ->
+            item is ChatItem.Approval && item.requestId in openIds && item.status is CardStatus.Answered && atSend is CardStatus.Answered ->
                 item.copy(status = CardStatus.Open)
-            item is ChatItem.Clarify && item.requestId in openIds && item.status is CardStatus.Answered ->
+            item is ChatItem.Clarify && item.requestId in openIds && item.status is CardStatus.Answered && atSend is CardStatus.Answered ->
                 item.copy(status = CardStatus.Open)
             else -> item
         }
@@ -44,7 +45,7 @@ private fun reconcileCards(state: ChatState, openIds: Set<String>, known: Set<St
 private const val ANSWERED_ELSEWHERE = "answered elsewhere"
 
 /** The id of the server request an approval or clarify card answers; null for any other item. */
-internal val ChatItem.cardRequestId: String?
+private val ChatItem.cardRequestId: String?
     get() = when (this) {
         is ChatItem.Approval -> requestId
         is ChatItem.Clarify -> requestId
@@ -102,19 +103,23 @@ private fun applyEvent(state: ChatState, event: RpcFrame.Event): ChatState {
         "tool.complete" -> completeTool(state, payload)
         "request.cancel" -> {
             val id = payload["id"].string() ?: return state
-            state.updateCard(id) { cancelledStatus(payload["reason"].string()) }
+            state.updateCard(id, ::cancelReplaces) { cancelledStatus(payload["reason"].string()) }
         }
         "approval.cancelled" -> {
             val ids = (payload["request_ids"] as? JsonArray)?.mapNotNull { it.string() }.orEmpty()
             val status = cancelledStatus(payload["reason"].string())
             state.copy(items = state.items.map { item ->
-                if (item is ChatItem.Approval && item.approvalId in ids && item.status == CardStatus.Open) item.copy(status = status)
+                if (item is ChatItem.Approval && item.approvalId in ids && cancelReplaces(item.status)) item.copy(status = status)
                 else item
             })
         }
         else -> state
     }
 }
+
+/** A cancel from Hermes gives the real reason, so it also replaces the guess that the card was answered elsewhere. */
+private fun cancelReplaces(status: CardStatus): Boolean =
+    status == CardStatus.Open || status == CardStatus.Cancelled(ANSWERED_ELSEWHERE)
 
 private fun cancelledStatus(reason: String?): CardStatus =
     if (reason == "timeout") CardStatus.Expired else CardStatus.Cancelled(reason ?: "cancelled")
@@ -236,12 +241,19 @@ private fun clarifyItem(requestId: String, params: JsonObject): ChatItem.Clarify
     return ChatItem.Clarify(requestId, questions, CardStatus.Open)
 }
 
-/** Updates the status of the open card for server request [requestId]; answered or closed cards are kept. */
-private fun ChatState.updateCard(requestId: String, status: () -> CardStatus): ChatState =
+/**
+ * Updates the status of the card for server request [requestId] when [replaces] accepts its current
+ * status; by default only an open card changes, and answered or closed cards are kept.
+ */
+private fun ChatState.updateCard(
+    requestId: String,
+    replaces: (CardStatus) -> Boolean = { it == CardStatus.Open },
+    status: () -> CardStatus,
+): ChatState =
     copy(items = items.map { item ->
         when {
-            item is ChatItem.Approval && item.requestId == requestId && item.status == CardStatus.Open -> item.copy(status = status())
-            item is ChatItem.Clarify && item.requestId == requestId && item.status == CardStatus.Open -> item.copy(status = status())
+            item is ChatItem.Approval && item.requestId == requestId && replaces(item.status) -> item.copy(status = status())
+            item is ChatItem.Clarify && item.requestId == requestId && replaces(item.status) -> item.copy(status = status())
             else -> item
         }
     })

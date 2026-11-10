@@ -254,7 +254,17 @@ class ChatReducerTest {
             request("srq-4", "clarify", """{"questions":[{"qid":"q1","question":"Which?"}]}"""),
             request("srq-5", "approval", """{"request_id":"r5","command":"c"}"""),
             ChatInput.Answered("srq-5", "Allowed once"),
-            ChatInput.OpenRequests(ids = setOf("srq-2", "srq-5"), known = setOf("srq-1", "srq-2")),
+            request("srq-6", "approval", """{"request_id":"r6","command":"c"}"""),
+            ChatInput.Answered("srq-6", "Denied"),
+            ChatInput.OpenRequests(
+                ids = setOf("srq-2", "srq-5", "srq-6"),
+                cardsAtSend = mapOf(
+                    "srq-1" to CardStatus.Open,
+                    "srq-2" to CardStatus.Answered("Answered"),
+                    // Answered after the call was sent: Hermes may have taken its list before the answer.
+                    "srq-6" to CardStatus.Open,
+                ),
+            ),
         )
         assertEquals(
             listOf(
@@ -263,8 +273,45 @@ class ChatReducerTest {
                 CardStatus.Open,
                 CardStatus.Open,
                 CardStatus.Answered("Allowed once"),
+                CardStatus.Answered("Denied"),
             ),
             state.items.map { (it as? ChatItem.Approval)?.status ?: (it as ChatItem.Clarify).status },
+        )
+    }
+
+    @Test fun aCancelGivesItsReasonToACardTakenAsAnsweredElsewhere() {
+        val settled = run(
+            empty,
+            request("srq-1", "approval", """{"request_id":"r1","command":"c"}"""),
+            request("srq-2", "clarify", """{"questions":[{"qid":"q1","question":"Which?"}]}"""),
+            request("srq-3", "approval", """{"request_id":"r3","command":"c"}"""),
+            ChatInput.OpenRequests(ids = emptySet(), cardsAtSend = listOf("srq-1", "srq-2", "srq-3").associateWith { CardStatus.Open }),
+        )
+        val state = run(
+            settled,
+            event("request.cancel", """{"id":"srq-1","reason":"timeout"}"""),
+            event("request.cancel", """{"id":"srq-2","reason":"interrupted"}"""),
+            event("approval.cancelled", """{"request_ids":["r3"],"reason":"timeout"}"""),
+        )
+        assertEquals(
+            listOf(CardStatus.Expired, CardStatus.Cancelled("interrupted"), CardStatus.Expired),
+            state.items.map { (it as? ChatItem.Approval)?.status ?: (it as ChatItem.Clarify).status },
+        )
+    }
+
+    @Test fun aLateCancelLeavesOtherClosedCardsAlone() {
+        val state = run(
+            empty,
+            request("srq-1", "approval", """{"request_id":"r1","command":"c"}"""),
+            request("srq-2", "approval", """{"request_id":"r2","command":"c"}"""),
+            event("request.cancel", """{"id":"srq-1","reason":"interrupted"}"""),
+            event("request.cancel", """{"id":"srq-2","reason":"timeout"}"""),
+            event("request.cancel", """{"id":"srq-1","reason":"timeout"}"""),
+            event("approval.cancelled", """{"request_ids":["r2"],"reason":"interrupted"}"""),
+        )
+        assertEquals(
+            listOf(CardStatus.Cancelled("interrupted"), CardStatus.Expired),
+            state.items.map { (it as ChatItem.Approval).status },
         )
     }
 

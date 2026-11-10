@@ -211,7 +211,7 @@ class ChatController(
             )
             epoch = null
         }
-        // The chat was just rebuilt from this result, so there is nothing to settle against it.
+        // Not settled: the chat was rebuilt from this result, and a request that arrived since must keep its card.
         feedOpenRequests(result)
         if (live == null) return
         val position = peer.call("session.events.since", sinceParams(live, Long.MAX_VALUE)).jsonObject
@@ -227,8 +227,14 @@ class ChatController(
         put("last_seen", lastSeen)
     }
 
-    /** The request ids of the cards the chat shows; read before a call whose reply settles them. */
-    private fun knownRequestIds(): Set<String> = _state.value.items.mapNotNullTo(mutableSetOf()) { it.cardRequestId }
+    /** The status of each card the chat shows, by request id; read before a call whose reply settles them. */
+    private fun cardStatuses(): Map<String, CardStatus> = _state.value.items.mapNotNull { item ->
+        when (item) {
+            is ChatItem.Approval -> item.requestId to item.status
+            is ChatItem.Clarify -> item.requestId to item.status
+            else -> null
+        }
+    }.toMap()
 
     /**
      * Adds a card for each request in the result's `open_requests` and returns their ids, or null
@@ -254,12 +260,12 @@ class ChatController(
     }
 
     /**
-     * The result's `open_requests` is complete, so the [known] cards it does not mention are settled
-     * against it; [known] are those the chat showed when the call was sent.
+     * The result's `open_requests` is complete, so the cards in [cardsAtSend], those the chat showed
+     * when the call was sent, are settled against it.
      */
-    private fun settleOpenRequests(result: JsonObject, known: Set<String>) {
+    private fun settleOpenRequests(result: JsonObject, cardsAtSend: Map<String, CardStatus>) {
         val ids = feedOpenRequests(result) ?: return
-        feed(ChatInput.OpenRequests(ids, known))
+        feed(ChatInput.OpenRequests(ids, cardsAtSend))
     }
 
     /**
@@ -310,7 +316,7 @@ class ChatController(
         // Only adds cards: a request Hermes cancelled while the app was away is settled by its
         // cancel event in the replay, which carries the reason.
         feedOpenRequests(activated)
-        val known = knownRequestIds()
+        val cardsAtSend = cardStatuses()
         val missed = peer.call("session.events.since", sinceParams(live, _state.value.lastSeq)).jsonObject
         val restarted = missed.string("epoch") != epoch
         val latest = (missed["latest_seq"] as? JsonPrimitive)?.longOrNull ?: 0
@@ -328,7 +334,7 @@ class ChatController(
         val replayed = (missed["events"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::eventFrom) }
         replayed.forEach { feed(ChatInput.Event(it)) }
         log.log("resync: replayed ${replayed.size} events")
-        settleOpenRequests(missed, known)
+        settleOpenRequests(missed, cardsAtSend)
         return true
     }
 

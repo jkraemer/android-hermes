@@ -84,9 +84,9 @@ sealed interface ChatInput {
     data class Answered(val requestId: String, val label: String) : ChatInput
 
     /**
-     * The ids of the server requests Hermes reports as still unanswered, and the request ids of the
-     * cards the chat showed when the call was sent: only those are settled against the list, as a
-     * request Hermes registers after taking it can reach the app before the reply does.
+     * The ids of the server requests Hermes reports as still unanswered, and the status of each card
+     * the chat showed when the call was sent, by request id. Only those cards are settled against the
+     * list, as a request Hermes registers after taking it can reach the app before the reply does.
      */
-    data class OpenRequests(val ids: Set<String>, val known: Set<String>) : ChatInput
+    data class OpenRequests(val ids: Set<String>, val cardsAtSend: Map<String, CardStatus>) : ChatInput
 }

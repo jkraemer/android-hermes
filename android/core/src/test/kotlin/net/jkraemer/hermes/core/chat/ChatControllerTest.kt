@@ -718,6 +718,42 @@ class ChatControllerTest {
         assertEquals(listOf(CardStatus.Expired, CardStatus.Open), cardStatuses(chat))
     }
 
+    @Test fun cardAnsweredWhileEventsSinceIsInFlightKeepsItsAnswer() = test { peer, chat ->
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST]"))
+        chat.open("stored1")
+        peer.on("session.events.since") {
+            // Hermes settles the answer frame at once, but its snapshot was taken before it did.
+            chat.answerApproval("srq-1", ApprovalChoice.ONCE)
+            Json.parseToJsonElement(sinceResult("[]", latestSeq = 0, openRequests = "[$APPROVAL_REQUEST]"))
+        }
+
+        dropConnection(peer)
+
+        assertEquals(listOf("srq-1" to obj("""{"choice":"once"}""")), peer.answers)
+        assertEquals(CardStatus.Answered("Allowed once"), (chat.state.value.items.single() as ChatItem.Approval).status)
+
+        // Had that answer frame been lost, the next resync, sent after the answer, reopens the card.
+        peer.on("session.events.since", sinceResult("[]", latestSeq = 0, openRequests = "[$APPROVAL_REQUEST]"))
+
+        dropConnection(peer)
+
+        assertEquals(CardStatus.Open, (chat.state.value.items.single() as ChatItem.Approval).status)
+    }
+
+    @Test fun cancelHeldWhileEventsSinceIsInFlightShowsItsReason() = test { peer, chat ->
+        peer.on("session.resume", resumeResult(openRequests = "[$APPROVAL_REQUEST]"))
+        chat.open("stored1")
+        peer.on("session.events.since") {
+            // Hermes read its replay, then timed the approval out before listing the open requests.
+            peer.event("request.cancel", """{"id":"srq-1","method":"approval","reason":"timeout"}""", seq = 1)
+            Json.parseToJsonElement(sinceResult("[]", latestSeq = 0, openRequests = "[]"))
+        }
+
+        dropConnection(peer)
+
+        assertEquals(CardStatus.Expired, (chat.state.value.items.single() as ChatItem.Approval).status)
+    }
+
     @Test fun answerApprovalAfterDeadlineIsRefused() = runTest(UnconfinedTestDispatcher()) {
         var now = NOW
         val peer = FakePeer()
