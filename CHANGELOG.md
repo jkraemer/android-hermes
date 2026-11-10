@@ -23,10 +23,12 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
   Hermes' models, star the ones you want, and drag them into the order the
   options sheet shows.
 - Notifications for Hermes' scheduled job reports, for approvals and questions
-  that wait for you, and for finished replies in chats you have open in the
-  app. They arrive through UnifiedPush, so you need the ntfy app on the phone
-  and the hermes-app plugin on your Hermes server (see server/README.md).
-  Pushes are end-to-end encrypted: ntfy only ever sees ciphertext.
+  that wait for you, and for finished replies in chats you have sent a message
+  in from the app. An approval's notification goes away once it is answered
+  elsewhere. They arrive through UnifiedPush, so you need the ntfy app on the
+  phone and the hermes-app plugin on your Hermes server (see
+  server/README.md). Pushes are end-to-end encrypted: ntfy only ever sees
+  ciphertext.
 - Each scheduled job has a notification rule, set from the job's feed: off,
   every report, or only when the report matches a regular expression.
 - "Needs answer" now also shows up from notifications, so a question that
