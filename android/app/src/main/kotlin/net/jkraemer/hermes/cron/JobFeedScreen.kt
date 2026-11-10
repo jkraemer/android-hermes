@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -45,13 +46,15 @@ import com.mikepenz.markdown.model.State
 import net.jkraemer.hermes.chat.Composer
 import net.jkraemer.hermes.chat.Reply
 import net.jkraemer.hermes.core.cron.ShownRun
+import net.jkraemer.hermes.core.push.NotificationRule
 import net.jkraemer.hermes.sessions.formatRunTime
 import java.time.Clock
 
 /**
  * What a cron job called [name] reported, one entry per run, the newest at the bottom above the composer.
  * [onOpenMenu] opens the navigation drawer, [onOpenRun] gets the session of a run to show whole, and [onReply]
- * the newest reported run and the text the user answered it with. [clock] decides which day is today.
+ * the newest reported run and the text the user answered it with. [rule] says when the job's reports are announced
+ * and [onSaveRule] gets the one the user chose instead. [clock] decides which day is today.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -61,6 +64,8 @@ fun JobFeedScreen(
     onOpenMenu: () -> Unit,
     onOpenRun: (sessionId: String) -> Unit,
     onReply: (sessionId: String, text: String) -> Unit,
+    rule: NotificationRule,
+    onSaveRule: (NotificationRule) -> Unit,
     clock: Clock = Clock.systemDefaultZone(),
     keyboardVisible: Boolean = WindowInsets.isImeVisible,
 ) {
@@ -78,12 +83,21 @@ fun JobFeedScreen(
         }
     }
 
+    var editingRule by rememberSaveable { mutableStateOf(false) }
+    if (editingRule) {
+        NotificationRuleDialog(name, rule, onDismiss = { editingRule = false }, onSave = {
+            onSaveRule(it)
+            editingRule = false
+        })
+    }
+
     Scaffold(
         modifier = Modifier.testTag("job-feed-screen").imePadding(),
         topBar = {
             TopAppBar(
                 title = { Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigationIcon = { IconButton(onOpenMenu) { Icon(Icons.Filled.Menu, contentDescription = "Menu") } },
+                actions = { IconButton({ editingRule = true }) { Icon(Icons.Filled.Notifications, contentDescription = "Notifications") } },
             )
         },
     ) { padding ->

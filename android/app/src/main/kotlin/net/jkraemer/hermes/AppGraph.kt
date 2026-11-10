@@ -22,7 +22,6 @@ import net.jkraemer.hermes.core.auth.NotLoggedInException
 import net.jkraemer.hermes.core.auth.PersistentCookieJar
 import net.jkraemer.hermes.core.cron.CronApi
 import net.jkraemer.hermes.core.cron.FinalReplies
-import net.jkraemer.hermes.core.push.NotificationRule
 import net.jkraemer.hermes.core.push.PushApi
 import net.jkraemer.hermes.core.rpc.RpcConnection
 import net.jkraemer.hermes.core.sessions.SessionSummary
@@ -33,6 +32,7 @@ import net.jkraemer.hermes.push.PushRegistration
 import net.jkraemer.hermes.push.UnifiedPushDistributor
 import net.jkraemer.hermes.settings.FavoritesStore
 import net.jkraemer.hermes.settings.NeedsAnswerStore
+import net.jkraemer.hermes.settings.NotificationRulesStore
 import net.jkraemer.hermes.settings.SeenStore
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -132,6 +132,9 @@ class AppGraph(private val context: Context) {
 
     val favoritesStore = FavoritesStore(prefs)
 
+    /** When each cron job's reports are announced by a push. */
+    val notificationRules = NotificationRulesStore(prefs)
+
     /** The sessions announced by a push to wait for the user's answer. */
     val pushedNeedsAnswer = NeedsAnswerStore(prefs)
 
@@ -193,8 +196,7 @@ class AppGraph(private val context: Context) {
         pushedNeedsAnswer,
         chatsNeedingAnswer,
         Notifier(context),
-        // Until each cron job has a rule of its own, every report is announced.
-        { NotificationRule.Always },
+        notificationRules::ruleFor,
         { visibleSessionId.value },
         { sessions.finalReply(it) },
         scope,

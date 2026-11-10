@@ -11,7 +11,11 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isSelectable
+import androidx.compose.ui.test.isSelected
+import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -19,8 +23,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import kotlinx.coroutines.CompletableDeferred
+import net.jkraemer.hermes.core.push.NotificationRule
 import net.jkraemer.hermes.sessions.FakeSource
 import net.jkraemer.hermes.sessions.cronRun
 import net.jkraemer.hermes.settings.SeenStore
@@ -51,6 +57,8 @@ class JobFeedScreenTest {
     private val openedRuns = mutableListOf<String>()
     private val replies = mutableListOf<Pair<String, String>>()
     private var menus = 0
+    private var currentRule: NotificationRule = NotificationRule.Always
+    private val savedRules = mutableListOf<NotificationRule>()
     private lateinit var seen: SeenStore
     private lateinit var viewModel: JobFeedViewModel
 
@@ -87,6 +95,8 @@ class JobFeedScreenTest {
                     onOpenMenu = { menus++ },
                     onOpenRun = { openedRuns += it },
                     onReply = { run, text -> replies += run to text },
+                    rule = currentRule,
+                    onSaveRule = { savedRules += it },
                     clock = Clock.fixed(NOW, ZoneOffset.UTC),
                     keyboardVisible = false,
                 )
@@ -313,5 +323,34 @@ class JobFeedScreenTest {
         gate.complete(Unit)
         waitForEntries(10)
         assertEquals(4, source.mostRepliesInFlight)
+    }
+
+    private fun openDialog() = compose.onNodeWithContentDescription("Notifications").performClick()
+
+    @Test
+    fun theNotificationsButtonOpensTheDialogForTheJobAndSaveReportsTheChosenRule() {
+        jobWithRuns()
+        currentRule = NotificationRule.Always
+        show()
+        openDialog()
+
+        compose.onNodeWithText("Notifications for Attention Check").assertIsDisplayed()
+        compose.onNodeWithText("Off").performClick()
+        compose.onNodeWithText("Save").performClick()
+
+        assertEquals(listOf<NotificationRule>(NotificationRule.Off), savedRules)
+        compose.onNodeWithText("Notifications for Attention Check").assertDoesNotExist()
+    }
+
+    @Test
+    fun cancelLeavesTheRuleAlone() {
+        jobWithRuns()
+        show()
+        openDialog()
+        compose.onNodeWithText("Off").performClick()
+        compose.onNodeWithText("Cancel").performClick()
+
+        assertEquals(emptyList<NotificationRule>(), savedRules)
+        compose.onNodeWithText("Notifications for Attention Check").assertDoesNotExist()
     }
 }

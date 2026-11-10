@@ -39,6 +39,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
+import net.jkraemer.hermes.core.push.NotificationRule
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.login.LoginScreen
 import net.jkraemer.hermes.login.LoginViewModel
@@ -217,6 +218,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
         }
     }
     val feed = (current as? Screen.Job)?.let { open -> viewModel(key = open.key) { JobFeedViewModel(cronSource, open.jobId, graph.seenStore) } }
+    val rules by graph.notificationRules.rules.collectAsStateWithLifecycle()
     val sessionState by sessionList.state.collectAsStateWithLifecycle()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -347,6 +349,8 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                 onOpenMenu = { scope.launch { drawerState.open() } },
                 onOpenRun = { openRun(current, it) },
                 onReply = { run, text -> openRun(current, run, text) },
+                rule = rules[current.jobId] ?: NotificationRule.Always,
+                onSaveRule = { graph.notificationRules.set(current.jobId, it) },
             )
             else -> Unit
         }
