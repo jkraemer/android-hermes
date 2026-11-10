@@ -1,3 +1,7 @@
 name: hermes-app
 version: 0.1.0
 description: Companion plugin for the Hermes Android app (push notifications).
+provides_hooks:
+  - post_llm_call
+  - on_human_input_request
+  - on_human_input_resolved
