@@ -1,5 +1,6 @@
 package net.jkraemer.hermes.core.e2e
 
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -19,11 +20,14 @@ const val SILENT_JOB_PROMPT = "There is never anything new to report. Respond wi
 /** A name no earlier job of this long-lived Hermes home has. */
 fun uniqueName(prefix: String) = prefix + "-" + UUID.randomUUID().toString().take(8)
 
-/** Creates a daily job that runs [prompt] and returns its id; the test must delete it with [deleteCronJobs]. */
-suspend fun E2eClient.createCronJob(name: String, prompt: String): String {
+/**
+ * Creates a job that runs [prompt] on [schedule] (by default daily, so it runs only when triggered) and returns its id;
+ * the test must delete it with [deleteCronJobs].
+ */
+suspend fun E2eClient.createCronJob(name: String, prompt: String, schedule: String = "every 1d"): String {
     val body = buildJsonObject {
         put("name", name)
-        put("schedule", "every 1d")
+        put("schedule", schedule)
         put("prompt", prompt)
         put("deliver", "local")
     }.toString()
@@ -36,6 +40,17 @@ suspend fun E2eClient.runOnce(jobId: String): CronRun {
     val runs = cron.runs(jobId).runs
     assertEquals("runs of $jobId: $runs", 1, runs.size)
     return runs.single()
+}
+
+/** Waits up to [timeoutMs] for the scheduler to have run the job once to the end; null when it has not. */
+suspend fun E2eClient.awaitScheduledRun(jobId: String, timeoutMs: Long): CronRun? {
+    val deadline = System.currentTimeMillis() + timeoutMs
+    while (System.currentTimeMillis() < deadline) {
+        val runs = cron.runs(jobId).runs
+        if (runs.isNotEmpty() && runs.none { it.running }) return runs.single()
+        delay(2_000)
+    }
+    return null
 }
 
 /** Deletes the jobs, as far as they still exist. */

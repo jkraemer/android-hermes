@@ -36,6 +36,7 @@ import java.util.UUID
 
 private const val PUSH_TIMEOUT_MS = 60_000L
 private const val POLL_INTERVAL_MS = 1_000L
+private const val SCHEDULED_RUN_TIMEOUT_MS = 180_000L
 
 /** One message ntfy holds for a topic; [body] is what was published, [encoding] how ntfy carried it. */
 private class NtfyMessage(val encoding: String?, val body: ByteArray)
@@ -164,6 +165,7 @@ class PushE2eTest {
         val (command, card) = chat.requestRemoval(directory)
 
         val approval = inbox.awaitEvent { it is PushEvent.Approval } as PushEvent.Approval
+        // Hermes' human-input request id, not the card's srq- id (see the class comment).
         assertEquals(PushEvent.Approval(chat.storedId(), approval.requestId, card.command), approval)
         chat.answerGuarded(command, card, ApprovalChoice.DENY)
         assertEquals(PushEvent.Resolved(chat.storedId(), approval.requestId), inbox.awaitEvent { it is PushEvent.Resolved })
@@ -223,6 +225,27 @@ class PushE2eTest {
         if (silentReply == null || !isSilent(silentReply)) throw AssertionError("job did not stay silent as prompted (model misstep): $silentReply")
         delay(30_000)
         assertEquals("pushes after the silent run", listOf<PushEvent>(pushed), inbox.events())
+    }
+
+    /** What runs in a home lab: the gateway's scheduler (not the dashboard's run-now) fires the job, in its own process. */
+    @Test
+    fun cronPushFromTheGatewaysScheduler() = runBlocking {
+        val app = subscribed()
+        val name = uniqueName("e2e-push-scheduled")
+        val job = app.createCronJob(name, REPORTING_JOB_PROMPT, schedule = "in 1m").also { createdJobs += it }
+
+        // Due in a minute; the gateway's scheduler ticks about once a minute, and the run takes one model turn.
+        val run = app.awaitScheduledRun(job, SCHEDULED_RUN_TIMEOUT_MS)
+            ?: throw AssertionError("the gateway's scheduler never ran job $job within ${SCHEDULED_RUN_TIMEOUT_MS / 1000} s (no push expected)")
+
+        val report = app.sessions.finalReply(run.sessionId)
+        if (report?.contains("cron-ok") != true) throw AssertionError("job did not report as prompted (model misstep): $report")
+        val pushed = try {
+            inbox.awaitEvent { it is PushEvent.Cron } as PushEvent.Cron
+        } catch (e: AssertionError) {
+            throw AssertionError("the scheduler ran job $job (session ${run.sessionId}) but no push arrived: ${e.message}")
+        }
+        assertEquals(PushEvent.Cron(run.sessionId, job, name, pushed.text, failed = false), pushed)
     }
 
     @Test
