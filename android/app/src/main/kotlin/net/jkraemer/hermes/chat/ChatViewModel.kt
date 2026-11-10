@@ -8,6 +8,8 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.StateFlow
@@ -34,8 +36,15 @@ import net.jkraemer.hermes.core.commands.commandCatalog
 import net.jkraemer.hermes.core.commands.parseSlashCommand
 import net.jkraemer.hermes.core.commands.runCommand
 import net.jkraemer.hermes.core.commands.showModelSwitch
+import net.jkraemer.hermes.core.options.ModelCatalog
+import net.jkraemer.hermes.core.options.ModelRef
 import net.jkraemer.hermes.core.options.ModelSwitch
+import net.jkraemer.hermes.core.options.modelCatalog
 import net.jkraemer.hermes.core.options.runModelCommand
+import net.jkraemer.hermes.core.options.setFast
+import net.jkraemer.hermes.core.options.setReasoning
+import net.jkraemer.hermes.core.options.setYolo
+import net.jkraemer.hermes.core.options.switchModel
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.settings.SeenStore
 import java.time.Instant
@@ -49,8 +58,11 @@ sealed interface ChatEffect {
     data class Prefill(val text: String) : ChatEffect
 }
 
-/** A `/model` switch waiting for the user's go-ahead: [message] says why, [retry] makes the switch with it. */
-data class PendingModel(val message: String, val retry: suspend () -> ModelSwitch)
+/**
+ * A model switch waiting for the user's go-ahead: [message] says why, [retry] makes the switch with it. A switch
+ * typed as `/model` is reported in the chat ([inChat]); one from the options sheet, in the sheet's messages.
+ */
+data class PendingModel(val message: String, val inChat: Boolean = true, val retry: suspend () -> ModelSwitch)
 
 /**
  * One opened chat. [storedSessionId] null starts a new one. Opens the session once the
@@ -66,6 +78,8 @@ class ChatViewModel(
     private val seenStore: SeenStore,
     log: HermesLog = HermesLog.None,
     private val pendingMessage: String? = null,
+    /** The models the user keeps at hand for the options sheet. */
+    val favorites: StateFlow<List<ModelRef>> = MutableStateFlow(emptyList()),
     private val clock: () -> Instant = Instant::now,
 ) : ViewModel() {
     // Everything this chat runs hangs off one job so close() can stop it all, the open in flight included.
@@ -101,8 +115,28 @@ class ChatViewModel(
 
     private val _pendingConfirmation = MutableStateFlow<PendingModel?>(null)
 
-    /** A typed `/model` the user has yet to confirm. */
+    /** A model switch the user has yet to confirm. */
     val pendingConfirmation: StateFlow<PendingModel?> = _pendingConfirmation.asStateFlow()
+
+    private val _modelCatalog = MutableStateFlow<ModelCatalog?>(null)
+
+    /** The models Hermes offers this session; null until the options sheet has loaded them. */
+    val modelCatalog: StateFlow<ModelCatalog?> = _modelCatalog.asStateFlow()
+
+    private val _switchDeferred = MutableStateFlow(false)
+
+    /** Whether the last model switch from the options sheet waits for the running turn to end. */
+    val switchDeferred: StateFlow<Boolean> = _switchDeferred.asStateFlow()
+
+    /** Whether the user switched YOLO off for this session. */
+    private val yoloSwitchedOff = MutableStateFlow(false)
+
+    /**
+     * Whether YOLO is on although the user switched it off for this session: Hermes reports YOLO on while its global
+     * approvals mode is off, whatever the session's own flag says, so the session cannot be made to ask.
+     */
+    val globalYolo: StateFlow<Boolean> = combine(yoloSwitchedOff, chat.map { it.options?.yolo == true }) { off, on -> off && on }
+        .stateIn(scope, SharingStarted.Eagerly, false)
 
     /** The catalogue load in flight or last finished; commands wait for it rather than start another. */
     private var catalogLoad: Deferred<Unit>? = null
@@ -235,6 +269,39 @@ class ChatViewModel(
         }
     }
 
+    /** The options sheet opened: asks Hermes what it offers this session, keeping what it last offered meanwhile. */
+    fun loadModelCatalog() {
+        _switchDeferred.value = false
+        launchGuarded("Couldn't load the models") { _modelCatalog.value = peer.modelCatalog(chat.value.liveSessionId) }
+    }
+
+    fun switchModel(ref: ModelRef) = launchGuarded("Couldn't change the model") {
+        _switchDeferred.value = false
+        reportSwitch(controller.switchModel(ref)) { controller.switchModel(ref, confirmed = true) }
+    }
+
+    fun setReasoning(level: String) = launchGuarded("Couldn't change reasoning") { controller.setReasoning(level) }
+
+    fun setFast(on: Boolean) = launchGuarded("Couldn't change fast mode") { controller.setFast(on) }
+
+    fun setYolo(on: Boolean) = launchGuarded("Couldn't change YOLO") {
+        controller.setYolo(on)
+        yoloSwitchedOff.value = !on
+    }
+
+    /** Tells the options sheet what became of a switch; a switch that needs the user's go-ahead waits for it, and [confirmed] makes it then. */
+    private fun reportSwitch(switch: ModelSwitch, confirmed: suspend () -> ModelSwitch) {
+        when (switch) {
+            is ModelSwitch.Applied -> _message.value = switch.warning
+            is ModelSwitch.Deferred -> {
+                _switchDeferred.value = true
+                _message.value = switch.warning
+            }
+            is ModelSwitch.NeedsConfirmation ->
+                _pendingConfirmation.value = PendingModel(switch.message, inChat = false, confirmed)
+        }
+    }
+
     fun effectHandled() {
         _effect.value = null
     }
@@ -242,7 +309,10 @@ class ChatViewModel(
     /** Makes the switch the user confirmed and tells the chat what it did, as the first attempt would have. */
     fun confirmModel() {
         val pending = _pendingConfirmation.getAndUpdate { null } ?: return
-        launchGuarded("Couldn't switch the model") { controller.showModelSwitch(pending.retry()) }
+        launchGuarded("Couldn't switch the model") {
+            val switch = pending.retry()
+            if (pending.inChat) controller.showModelSwitch(switch) else reportSwitch(switch, pending.retry)
+        }
     }
 
     fun dismissConfirmation() {

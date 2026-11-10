@@ -90,6 +90,7 @@ class ChatScreenTest {
                     onNewChat = { newChats++ },
                     onRetryConnect = { reconnects++ },
                     onStoredSessionId = { storedIds += it },
+                    onOpenFavorites = {},
                     clock = { NOW },
                     keyboardVisible = keyboardVisible.value,
                 )

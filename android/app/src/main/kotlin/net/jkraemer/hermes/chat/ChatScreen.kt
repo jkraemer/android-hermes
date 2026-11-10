@@ -84,7 +84,8 @@ import kotlinx.coroutines.ensureActive
 /**
  * [cron] is whether this chat is a cron run, whose work before its final reply is shown collapsed.
  * [onOpenMenu] opens the navigation drawer, [onNewChat] starts another chat.
- * [onStoredSessionId] reports the stored id a new chat got, so the app can track the chat under it. */
+ * [onStoredSessionId] reports the stored id a new chat got, so the app can track the chat under it.
+ * [onOpenFavorites] leaves for choosing the favorite models the options sheet lists. */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
@@ -94,6 +95,7 @@ fun ChatScreen(
     onNewChat: () -> Unit,
     onRetryConnect: () -> Unit,
     onStoredSessionId: (String) -> Unit,
+    onOpenFavorites: () -> Unit,
     clock: () -> Instant = Instant::now,
     keyboardVisible: Boolean = WindowInsets.isImeVisible,
 ) {
@@ -107,6 +109,7 @@ fun ChatScreen(
     val pendingConfirmation by viewModel.pendingConfirmation.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
     val ready = connection == ConnectionState.Ready
+    var optionsOpen by rememberSaveable { mutableStateOf(false) }
 
     val started by LocalLifecycleOwner.current.lifecycle.currentStateAsState()
     LaunchedEffect(started.isAtLeast(Lifecycle.State.STARTED)) { viewModel.setVisible(started.isAtLeast(Lifecycle.State.STARTED)) }
@@ -124,12 +127,15 @@ fun ChatScreen(
                 viewModel.effectHandled()
                 onNewChat()
             }
-            // Nothing shows the options yet, so the effect is only consumed.
-            ChatEffect.OpenOptions -> viewModel.effectHandled()
+            ChatEffect.OpenOptions -> {
+                viewModel.effectHandled()
+                optionsOpen = true
+            }
             // The composer takes the text and acknowledges it.
             is ChatEffect.Prefill, null -> Unit
         }
     }
+    if (optionsOpen) SessionOptionsSheet(viewModel, onOpenFavorites, onDismiss = { optionsOpen = false })
     pendingConfirmation?.let { ModelConfirmDialog(it, onConfirm = viewModel::confirmModel, onDismiss = viewModel::dismissConfirmation) }
 
     Scaffold(
@@ -163,6 +169,7 @@ fun ChatScreen(
                 commands = commands,
                 slashMenu = true,
                 onMenuOpened = viewModel::menuOpened,
+                leading = { ModelChip(chat.options, enabled = ready, onClick = { optionsOpen = true }) },
                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
             )
         }

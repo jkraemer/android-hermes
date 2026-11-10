@@ -172,6 +172,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
         viewModel(key = open.key) {
             ChatViewModel(
                 graph.rpc, open.storedSessionId, open.title, graph.needsAnswer, graph.seenStore, log = graph.log, pendingMessage = open.pendingMessage,
+                favorites = graph.favoritesStore.favorites,
             )
         }
     }
@@ -297,6 +298,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
                     onNewChat = { openChat(null, null, false) },
                     onRetryConnect = graph::reconnect,
                     onStoredSessionId = { id -> if (current.storedSessionId == null) show(current.copy(storedSessionId = id)) },
+                    onOpenFavorites = { show(Screen.FavoriteModels(back = current.reopened())) },
                 )
             }
             is Screen.Job -> JobFeedScreen(
