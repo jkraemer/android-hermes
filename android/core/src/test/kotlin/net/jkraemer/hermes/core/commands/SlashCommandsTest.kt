@@ -115,4 +115,26 @@ class SlashCommandsTest {
         assertTrue(empty.entries.isEmpty())
         assertNull(empty.canonical("/title"))
     }
+
+    @Test
+    fun aNameOfferedTwiceAppearsOnce() {
+        val duplicated = commandCatalogFrom(
+            Json.parseToJsonElement(
+                """
+                {
+                  "canon": {"/status": "/status", "/arxiv": "/arxiv"},
+                  "categories": [
+                    {"name": "Session", "pairs": [["/status", "Show status"]]},
+                    {"name": "User commands", "pairs": [["/status", "A quick command"], ["/arxiv", "A quick command"]]}
+                  ],
+                  "skills": {"/arxiv": {"usage": 1, "origin": "bundled"}}
+                }
+                """.trimIndent(),
+            ).jsonObject,
+        )
+
+        assertEquals(listOf("/status", "/arxiv"), duplicated.entries.map { it.name })
+        assertEquals("Session", duplicated.entries.first().group)
+        assertEquals("User commands", duplicated.entries.last().group)
+    }
 }

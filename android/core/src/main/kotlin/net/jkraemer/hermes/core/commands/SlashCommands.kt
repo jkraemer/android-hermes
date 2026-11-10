@@ -68,7 +68,8 @@ fun commandCatalogFrom(result: JsonObject): CommandCatalog {
     val skillEntries = skills.sorted().filter(::inMenu).map { SlashEntry(it, descriptions[it].orEmpty(), SKILLS_GROUP) }
 
     val known = canon + (skills + pluginCommands).associate { it.lowercase() to it }
-    return CommandCatalog(categoryEntries + skillEntries, known)
+    // Hermes lists a quick command named like a built-in or a skill again under User commands; the first entry stands.
+    return CommandCatalog((categoryEntries + skillEntries).distinctBy { it.name }, known)
 }
 
 /** The catalogue of [sessionId]'s session (its skills depend on the session's directory); the default one without. */
