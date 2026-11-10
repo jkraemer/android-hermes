@@ -153,7 +153,7 @@ private fun HermesRoot(graph: AppGraph) {
             )
         }
         is Screen.FavoriteModels -> {
-            val favoriteModels = viewModel { FavoriteModelsViewModel(graph.rpc, graph.favoritesStore) }
+            val favoriteModels = viewModel { FavoriteModelsViewModel({ graph.rpc }, graph.favoritesStore) }
             BackHandler(current.back != null) { screen = current.back }
             FavoriteModelsScreen(favoriteModels, onBack = { screen = current.back })
         }

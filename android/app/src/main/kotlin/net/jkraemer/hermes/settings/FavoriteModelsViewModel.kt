@@ -17,7 +17,7 @@ import net.jkraemer.hermes.core.options.modelCatalog
 data class FavoriteModelsState(val catalog: ModelCatalog? = null, val loading: Boolean = true, val failed: Boolean = false)
 
 /** The models Hermes offers, once [load]ed, and the favorites among them. */
-class FavoriteModelsViewModel(private val peer: RpcPeer, private val store: FavoritesStore) : ViewModel() {
+class FavoriteModelsViewModel(private val peer: () -> RpcPeer, private val store: FavoritesStore) : ViewModel() {
     private val _state = MutableStateFlow(FavoriteModelsState())
     val state: StateFlow<FavoriteModelsState> = _state.asStateFlow()
 
@@ -28,7 +28,7 @@ class FavoriteModelsViewModel(private val peer: RpcPeer, private val store: Favo
         _state.update { it.copy(loading = true, failed = false) }
         viewModelScope.launch {
             try {
-                _state.value = FavoriteModelsState(peer.modelCatalog(null), loading = false)
+                _state.value = FavoriteModelsState(peer().modelCatalog(null), loading = false)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {

@@ -49,9 +49,11 @@ class FavoriteModelsScreenTest {
 
     @Before fun clean() = prefs.edit().clear().apply()
 
+    private var current: FakePeer = peer
+
     private fun show() {
         compose.setContent {
-            MaterialTheme { FavoriteModelsScreen(FavoriteModelsViewModel(peer, store), onBack = {}) }
+            MaterialTheme { FavoriteModelsScreen(FavoriteModelsViewModel({ current }, store), onBack = {}) }
         }
     }
 
@@ -131,6 +133,17 @@ class FavoriteModelsScreenTest {
         waitForText("Couldn't load models")
 
         peer.failing = emptySet()
+        compose.onNodeWithText("Retry").performClick()
+        waitForText("Anthropic")
+    }
+
+    @Test
+    fun retryUsesTheConnectionOfTheMoment() {
+        peer.failing = setOf("model.options")
+        show()
+        waitForText("Couldn't load models")
+
+        current = FakePeer().apply { results["model.options"] = MODEL_OPTIONS }
         compose.onNodeWithText("Retry").performClick()
         waitForText("Anthropic")
     }
