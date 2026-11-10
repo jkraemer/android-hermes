@@ -8,7 +8,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import net.jkraemer.hermes.core.HermesLog
 import net.jkraemer.hermes.core.auth.FileCookieStore
@@ -17,14 +22,17 @@ import net.jkraemer.hermes.core.auth.NotLoggedInException
 import net.jkraemer.hermes.core.auth.PersistentCookieJar
 import net.jkraemer.hermes.core.cron.CronApi
 import net.jkraemer.hermes.core.cron.FinalReplies
+import net.jkraemer.hermes.core.push.NotificationRule
 import net.jkraemer.hermes.core.push.PushApi
 import net.jkraemer.hermes.core.rpc.RpcConnection
 import net.jkraemer.hermes.core.sessions.SessionSummary
 import net.jkraemer.hermes.core.sessions.SessionsApi
+import net.jkraemer.hermes.push.Notifier
 import net.jkraemer.hermes.push.PushHandler
 import net.jkraemer.hermes.push.PushRegistration
 import net.jkraemer.hermes.push.UnifiedPushDistributor
 import net.jkraemer.hermes.settings.FavoritesStore
+import net.jkraemer.hermes.settings.NeedsAnswerStore
 import net.jkraemer.hermes.settings.SeenStore
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -33,6 +41,7 @@ import java.io.File
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import kotlin.time.Duration.Companion.seconds
 
 sealed interface Screen {
     data object Login : Screen
@@ -123,8 +132,29 @@ class AppGraph(private val context: Context) {
 
     val favoritesStore = FavoritesStore(prefs)
 
-    /** Stored ids of the sessions waiting for the user's answer; the chat screen keeps it current. */
-    val needsAnswer = MutableStateFlow(emptySet<String>())
+    /** The sessions announced by a push to wait for the user's answer. */
+    val pushedNeedsAnswer = NeedsAnswerStore(prefs)
+
+    /** Stored ids of the sessions whose chats showed an open card; the chat screens keep it current. */
+    val chatsNeedingAnswer = MutableStateFlow(emptySet<String>())
+
+    /** Stored ids of the sessions waiting for the user's answer: those the chats showed and those a push announced. */
+    val needsAnswer: StateFlow<Set<String>> =
+        combine(chatsNeedingAnswer, pushedNeedsAnswer.sessions) { chats, pushed -> chats + pushed }
+            .stateIn(scope, SharingStarted.Eagerly, chatsNeedingAnswer.value + pushedNeedsAnswer.sessions.value)
+
+    /** The stored id of the chat on screen, if any. */
+    val visibleSessionId = MutableStateFlow<String?>(null)
+
+    init {
+        // A request nobody resolved expires by itself; nothing else would notice while the app only sits there.
+        scope.launch {
+            while (true) {
+                delay(EXPIRY_CHECK_INTERVAL)
+                pushedNeedsAnswer.dropExpired()
+            }
+        }
+    }
 
     /**
      * The Hermes server. Assigning it, even to the same value, persists it and rebuilds [auth],
@@ -158,7 +188,17 @@ class AppGraph(private val context: Context) {
         { pushApi }, UnifiedPushDistributor, { context.getSystemService(NotificationManager::class.java).areNotificationsEnabled() }, scope,
     )
 
-    val pushHandler = PushHandler(pushRegistration)
+    val pushHandler = PushHandler(
+        pushRegistration,
+        pushedNeedsAnswer,
+        Notifier(context),
+        // Until each cron job has a rule of its own, every report is announced.
+        { NotificationRule.Always },
+        { visibleSessionId.value },
+        { sessions.finalReply(it) },
+        scope,
+        log,
+    )
 
     private fun buildServices(url: HttpUrl): Services {
         val auth = HermesAuth(url, client)
@@ -226,6 +266,7 @@ class AppGraph(private val context: Context) {
     }
 
     private companion object {
+        val EXPIRY_CHECK_INTERVAL = 30.seconds
         const val LOG_TAG = "Hermes"
         const val PREFS_NAME = "hermes"
         const val SERVER_URL_KEY = "server_url"

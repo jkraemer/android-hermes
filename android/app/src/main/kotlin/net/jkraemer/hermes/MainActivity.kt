@@ -1,5 +1,6 @@
 package net.jkraemer.hermes
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -22,6 +23,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.jkraemer.hermes.sessions.SessionsDrawerContent
+import net.jkraemer.hermes.push.Notifier
 import net.jkraemer.hermes.push.PushStatus
 import net.jkraemer.hermes.settings.FavoriteModelsScreen
 import net.jkraemer.hermes.settings.FavoriteModelsViewModel
@@ -48,15 +50,26 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 class MainActivity : ComponentActivity() {
     private val graph get() = (application as HermesApp).graph
 
+    /** The session a tapped notification asked for, until the app has opened it. */
+    private val requestedSession = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The system bar icons follow the system's light or dark setting, like the theme does.
         enableEdgeToEdge()
+        // A recreated activity restores its screen; the launching intent was already acted on.
+        if (savedInstanceState == null) requestedSession.value = intent.getStringExtra(Notifier.EXTRA_SESSION_ID)
         setContent {
             HermesTheme {
-                Surface { HermesRoot(graph) }
+                Surface { HermesRoot(graph, requestedSession.value) { requestedSession.value = null } }
             }
         }
+    }
+
+    // A tapped notification reaches the running activity here.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra(Notifier.EXTRA_SESSION_ID)?.let { requestedSession.value = it }
     }
 
     // Coming to the foreground is when a failed connection gets its next try.
@@ -112,12 +125,19 @@ internal val ScreenSaver = Saver<Screen?, String>(
 )
 
 @Composable
-private fun HermesRoot(graph: AppGraph) {
+private fun HermesRoot(graph: AppGraph, requestedSession: String?, onSessionOpened: () -> Unit) {
     var screen by rememberSaveable(stateSaver = ScreenSaver) { mutableStateOf<Screen?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         if (screen == null) screen = graph.startScreen()
+    }
+    // A session asked for by a notification opens once there is somewhere to open it: after the start screen is known and not the login.
+    LaunchedEffect(requestedSession, screen == null || screen == Screen.Login) {
+        if (requestedSession != null && screen != null && screen != Screen.Login) {
+            screen = Screen.Chat(requestedSession)
+            onSessionOpened()
+        }
     }
     // A lost session shows as a failed connection that needs a login.
     LaunchedEffect(screen == null || screen == Screen.Login) {
@@ -191,8 +211,8 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
     val chat = (current as? Screen.Chat)?.let { open ->
         viewModel(key = open.key) {
             ChatViewModel(
-                graph.rpc, open.storedSessionId, open.title, graph.needsAnswer, graph.seenStore, log = graph.log, pendingMessage = open.pendingMessage,
-                favorites = graph.favoritesStore.favorites,
+                graph.rpc, open.storedSessionId, open.title, graph.chatsNeedingAnswer, graph.seenStore, graph.pushedNeedsAnswer, graph.visibleSessionId,
+                log = graph.log, pendingMessage = open.pendingMessage, favorites = graph.favoritesStore.favorites,
             )
         }
     }

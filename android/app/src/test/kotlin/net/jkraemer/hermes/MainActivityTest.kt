@@ -15,7 +15,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.junit4.v2.createEmptyComposeRule
+import android.content.Intent
 import androidx.lifecycle.Lifecycle
+import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.core.app.ActivityScenario
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -39,6 +41,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.shadows.ShadowLooper
 
 private const val CRON_TRANSCRIPT = """[{"role":"user","text":"/attention-check"},{"role":"assistant","text":"All quiet."}]"""
 
@@ -198,6 +201,45 @@ class MainActivityTest {
         }
     }
 
+    private fun notificationTap(sessionId: String) =
+        Intent(RuntimeEnvironment.getApplication(), MainActivity::class.java).putExtra("session_id", sessionId)
+
+    private fun lastResumedSession(): String? {
+        ShadowLooper.idleMainLooper()
+        return rpcCalls("session.resume").lastOrNull()?.get("session_id")?.jsonPrimitive?.content
+    }
+
+    @Test
+    fun launchedByANotificationOpensItsSession() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Baking" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch<MainActivity>(notificationTap("id-Baking")).use {
+            awaitTag("chat-screen")
+            compose.waitUntil(10_000) { lastResumedSession() == "id-Baking" }
+        }
+    }
+
+    @Test
+    fun aNotificationTappedWhileTheAppIsRunningOpensItsSession() {
+        serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui", "Baking" to "tui"), gateway = true)
+        storeSessionCookie()
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            awaitTag("chat-screen")
+            compose.waitUntil(10_000) { lastResumedSession() == "id-Sourdough" }
+
+            scenario.onActivity { InstrumentationRegistry.getInstrumentation().callActivityOnNewIntent(it, notificationTap("id-Baking")) }
+
+            compose.waitUntil(10_000) { lastResumedSession() == "id-Baking" }
+        }
+    }
+
+    @Test
+    fun aNotificationTappedWhileLoggedOutWaitsForTheLogin() {
+        serverAnswering(me = 401)
+        storeSessionCookie()
+        ActivityScenario.launch<MainActivity>(notificationTap("id-Baking")).use { awaitTag("login-screen") }
+    }
+
     @Test
     fun launchReopensTheChatThatWasActiveJustNow() {
         serverAnswering(me = 200, sessions = sessionsJson("Sourdough" to "tui"))
@@ -292,7 +334,7 @@ class MainActivityTest {
 
             await(inChat("Baking"))
             compose.waitUntil(10_000) { rpcCalls("session.resume").size == 2 }
-            assertEquals("id-Baking", rpcCalls("session.resume").last()["session_id"]?.jsonPrimitive?.content)
+            assertEquals("id-Baking", rpcCalls("session.resume").lastOrNull()?.get("session_id")?.jsonPrimitive?.content)
             assertTrue("the first chat's controller was not closed", first.isClosed)
             val open = chatModels(scenario).filter { !it.isClosed }
             assertEquals(1, open.size)

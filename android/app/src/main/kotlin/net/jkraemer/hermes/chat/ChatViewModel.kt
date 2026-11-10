@@ -45,6 +45,7 @@ import net.jkraemer.hermes.core.options.setReasoning
 import net.jkraemer.hermes.core.options.setYolo
 import net.jkraemer.hermes.core.options.switchModel
 import net.jkraemer.hermes.core.rpc.ConnectionState
+import net.jkraemer.hermes.settings.NeedsAnswerStore
 import net.jkraemer.hermes.settings.SeenStore
 import java.time.Instant
 
@@ -66,8 +67,10 @@ data class PendingModel(val message: String, val inChat: Boolean = true, val ret
 /**
  * One opened chat. [storedSessionId] null starts a new one. Opens the session once the
  * connection is ready (and again after a failed open, when it next becomes ready), and keeps
- * [needsAnswer] and [seenStore] current for the session while it lives. [pendingMessage], if
- * any, is sent once the session is open.
+ * [needsAnswer] and [seenStore] current for the session while it lives. A session with an open card stays in
+ * [needsAnswer] when the chat is closed, until a chat of it shows no open card. Such a chat also clears the session
+ * from [pushed], the sessions a push announced. [visibleSession] holds the stored id of the chat on screen.
+ * [pendingMessage], if any, is sent once the session is open.
  */
 class ChatViewModel(
     private val peer: RpcPeer,
@@ -75,6 +78,8 @@ class ChatViewModel(
     initialTitle: String?,
     private val needsAnswer: MutableStateFlow<Set<String>>,
     private val seenStore: SeenStore,
+    private val pushed: NeedsAnswerStore? = null,
+    private val visibleSession: MutableStateFlow<String?>? = null,
     log: HermesLog = HermesLog.None,
     private val pendingMessage: String? = null,
     /** The models the user keeps at hand for the options sheet. */
@@ -154,6 +159,7 @@ class ChatViewModel(
         scope.launch { chat.collect { parseFinishedReplies(it.items) } }
         scope.launch { chat.map { it.running }.distinctUntilChanged().collect { running -> if (running) _switchDeferred.value = false } }
         scope.launch { markSeenWhileVisible() }
+        scope.launch { publishVisibleSession() }
         scope.launch { peer.events.collect { event -> if (event.type in TITLE_EVENTS) onTitleEvent(event.type, event.payload) } }
     }
 
@@ -169,6 +175,20 @@ class ChatViewModel(
             previous = current
             if (id != null && isVisible && !replyStarted) seenStore.markOpened(id, clock())
         }
+    }
+
+    private suspend fun publishVisibleSession() {
+        combine(chat.map { it.storedSessionId }, visible, ::Pair).collect { (id, isVisible) -> setVisibleSession(id.takeIf { isVisible }) }
+    }
+
+    private var shownSession: String? = null
+
+    /** Leaves [visibleSession] alone when another chat has taken it over, as happens while the screen changes. */
+    @Synchronized
+    private fun setVisibleSession(id: String?) {
+        val mine = shownSession
+        shownSession = id
+        visibleSession?.update { current -> if (id != null || current == mine) id else current }
     }
 
     private suspend fun openWhenReady() {
@@ -203,6 +223,7 @@ class ChatViewModel(
             registeredId = id
         }
         id?.let { stored -> needsAnswer.update { if (needsAnswerNow) it + stored else it - stored } }
+        if (id != null && !needsAnswerNow) pushed?.clearSession(id)
     }
 
     /** A streaming reply changes with every delta, so only finished ones are parsed. */
@@ -361,10 +382,10 @@ class ChatViewModel(
      */
     val hasStoredSession: Boolean get() = storedSessionId != null || chat.value.items.isNotEmpty()
 
-    /** Stops the controller and takes the chat out of [needsAnswer]; safe to call again. */
+    /** Stops the controller; safe to call again. */
     fun close() {
         work.cancel()
-        registeredId?.let { id -> needsAnswer.update { it - id } }
+        setVisibleSession(null)
         registeredId = null
         controller.close()
     }

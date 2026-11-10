@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import net.jkraemer.hermes.core.chat.ApprovalChoice
 import net.jkraemer.hermes.core.options.ModelRef
 import net.jkraemer.hermes.core.rpc.ConnectionState
+import net.jkraemer.hermes.settings.NeedsAnswerStore
 import net.jkraemer.hermes.settings.SeenStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,16 +34,19 @@ class ChatViewModelTest {
     private val peer = FakePeer()
     private val needsAnswer = MutableStateFlow(emptySet<String>())
     private lateinit var seenStore: SeenStore
+    private lateinit var pushed: NeedsAnswerStore
+    private val visibleSession = MutableStateFlow<String?>(null)
 
     @Before
     fun setUp() {
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-vm-test", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
         seenStore = SeenStore(prefs)
+        pushed = NeedsAnswerStore(prefs) { NOW }
     }
 
     private fun viewModel(id: String? = "stored1", pendingMessage: String? = null) =
-        ChatViewModel(peer, id, null, needsAnswer, seenStore, pendingMessage = pendingMessage) { NOW }
+        ChatViewModel(peer, id, null, needsAnswer, seenStore, pendingMessage = pendingMessage, pushed = pushed, visibleSession = visibleSession) { NOW }
 
     private fun submitted() = peer.calls.filter { it.first == "prompt.submit" }.map { (it.second["text"] as kotlinx.serialization.json.JsonPrimitive).content }
 
@@ -106,6 +110,64 @@ class ChatViewModelTest {
 
         assertTrue(needsAnswer.value.isEmpty())
         assertTrue(seenStore.lastOpened().isEmpty())
+    }
+
+    @Test
+    fun aChatClosedWithAnOpenCardKeepsItsSessionInNeedsAnswer() {
+        peer.resume = OPEN_APPROVAL
+        val chat = viewModel()
+        settle()
+        assertEquals(setOf("stored1"), needsAnswer.value)
+
+        chat.close()
+
+        assertEquals(setOf("stored1"), needsAnswer.value)
+    }
+
+    @Test
+    fun aChatWithoutAnOpenCardTakesItsSessionOutOfNeedsAnswerAndThePushStore() {
+        peer.resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":false,"open_requests":[]}"""
+        needsAnswer.value = setOf("stored1", "other")
+        pushed.add("stored1", "r1", NOW.plusSeconds(300))
+        pushed.add("other", "r2", NOW.plusSeconds(300))
+
+        viewModel()
+        settle()
+
+        assertEquals(setOf("other"), needsAnswer.value)
+        assertEquals(setOf("other"), pushed.sessions.value)
+    }
+
+    @Test
+    fun aChatWithAnOpenCardLeavesThePushStoreAlone() {
+        peer.resume = OPEN_APPROVAL
+        pushed.add("stored1", "r1", NOW.plusSeconds(300))
+
+        viewModel()
+        settle()
+
+        assertEquals(setOf("stored1"), pushed.sessions.value)
+    }
+
+    @Test
+    fun theSessionOnScreenIsTheOneOfTheVisibleChat() {
+        peer.resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":false,"open_requests":[]}"""
+        val chat = viewModel()
+        settle()
+        assertNull(visibleSession.value)
+
+        chat.setVisible(true)
+        settle()
+        assertEquals("stored1", visibleSession.value)
+
+        chat.setVisible(false)
+        settle()
+        assertNull(visibleSession.value)
+
+        chat.setVisible(true)
+        settle()
+        chat.close()
+        assertNull(visibleSession.value)
     }
 
     @Test

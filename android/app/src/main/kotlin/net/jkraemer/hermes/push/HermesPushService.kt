@@ -12,7 +12,7 @@ class HermesPushService : PushService() {
 
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) = handler.onNewEndpoint(endpoint)
 
-    override fun onMessage(message: PushMessage, instance: String) = handler.onMessage(message)
+    override fun onMessage(message: PushMessage, instance: String) = handler.onMessage(message.content, message.decrypted)
 
     override fun onRegistrationFailed(reason: FailedReason, instance: String) = handler.onRegistrationFailed(reason)
 
