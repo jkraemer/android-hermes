@@ -130,3 +130,68 @@ def test_the_log_has_neither_endpoint_nor_text(store, key_and_sub, caplog):
     assert "secret-topic" not in caplog.text
     assert "top-secret-text" not in caplog.text
     assert "ntfy.example" not in caplog.text
+
+
+# A process that submits one event to a sender whose post is slow (or never returns) and exits right away,
+# as a cron external worker does after its run. The post leaves a marker file when it completes.
+_EXITING_PROCESS = """
+import logging, sys, threading, time
+from pathlib import Path
+sys.path.insert(0, {plugin_dir!r})
+from sender import Sender
+from store import Store, Subscription
+
+logging.basicConfig(level=logging.INFO, stream=sys.stderr)
+work = Path({work_dir!r})
+store = Store(work / "push.db")
+store.set_subscription(Subscription({endpoint!r}, "p256dh", "auth"))
+
+def post(url, body, headers):
+    if {never_returns!r}:
+        threading.Event().wait()
+    time.sleep(1)
+    (work / "posted").write_bytes(body)
+    return 201
+
+kwargs = {{}} if {exit_wait!r} is None else {{"exit_wait_seconds": {exit_wait!r}}}
+Sender(lambda: store, lambda event, p256dh, auth: event, post, **kwargs).submit(b'{{"type": "cron", "text": "top-secret-text"}}')
+"""
+
+
+def run_exiting_process(tmp_path, never_returns=False, exit_wait=None):
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    plugin_dir = str(Path(__file__).resolve().parent.parent / "hermes-app")
+    script = _EXITING_PROCESS.format(
+        plugin_dir=plugin_dir, work_dir=str(tmp_path), endpoint=ENDPOINT, never_returns=never_returns, exit_wait=exit_wait
+    )
+    started = time.monotonic()
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=30)
+    return result, time.monotonic() - started
+
+
+def test_a_process_that_exits_right_after_submitting_still_sends(tmp_path):
+    result, _ = run_exiting_process(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "posted").read_bytes() == b'{"type": "cron", "text": "top-secret-text"}'
+    assert "push cron: HTTP 201" in result.stderr
+
+
+def test_the_exit_wait_is_bounded_and_reports_what_was_dropped(tmp_path):
+    result, elapsed = run_exiting_process(tmp_path, never_returns=True, exit_wait=0.5)
+
+    assert result.returncode == 0, result.stderr
+    assert elapsed < 10
+    assert not (tmp_path / "posted").exists()
+    assert "1 push event(s) not sent before exit" in result.stderr
+    assert "top-secret-text" not in result.stderr
+    assert "secret-topic" not in result.stderr
+
+
+def test_the_exit_wait_is_ten_seconds_by_default():
+    from sender import EXIT_WAIT_SECONDS
+
+    assert EXIT_WAIT_SECONDS == 10
