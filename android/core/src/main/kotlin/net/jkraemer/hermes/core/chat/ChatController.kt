@@ -24,6 +24,8 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.longOrNull
 import java.io.IOException
 import net.jkraemer.hermes.core.HermesLog
+import net.jkraemer.hermes.core.options.SessionOptions
+import net.jkraemer.hermes.core.options.sessionOptionsFrom
 import net.jkraemer.hermes.core.rpc.RpcException
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.core.rpc.RpcFrame
@@ -160,6 +162,12 @@ class ChatController(
         collectors.forEach { it.cancel() }
     }
 
+    internal fun liveSessionId(): String = requireLiveSession()
+
+    /** A `config.set` call; the result is Hermes' key/value answer. */
+    internal suspend fun configSet(params: JsonObject, timeoutMs: Long = 30_000): JsonObject =
+        peer.call("config.set", params, timeoutMs).jsonObject
+
     private fun requestInput(request: RpcFrame.ServerRequest) =
         ChatInput.Request(request, clock(), approvalTimeoutSeconds)
 
@@ -184,7 +192,7 @@ class ChatController(
     private fun requireLiveSession(): String =
         checkNotNull(_state.value.liveSessionId) { "No chat session is open" }
 
-    private fun feed(input: ChatInput) {
+    internal fun feed(input: ChatInput) {
         synchronized(lock) { _state.value = reduce(_state.value, input) }
     }
 
@@ -206,7 +214,11 @@ class ChatController(
         val live = result.string("session_id")
         synchronized(lock) {
             _state.value = reduce(
-                ChatState(liveSessionId = live, storedSessionId = result.string("stored_session_id") ?: requestedStoredId),
+                ChatState(
+                    liveSessionId = live,
+                    storedSessionId = result.string("stored_session_id") ?: requestedStoredId,
+                    options = optionsIn(result),
+                ),
                 ChatInput.Transcript(messages, running),
             )
             epoch = null
@@ -221,6 +233,9 @@ class ChatController(
             _state.value = _state.value.let { it.copy(lastSeq = maxOf(it.lastSeq, latest)) }
         }
     }
+
+    private fun optionsIn(result: JsonObject): SessionOptions? =
+        (result["info"] as? JsonObject)?.let(::sessionOptionsFrom)
 
     private fun sinceParams(live: String, lastSeen: Long) = buildJsonObject {
         put("session_id", live)
@@ -316,6 +331,7 @@ class ChatController(
         // Only adds cards: a request Hermes cancelled while the app was away is settled by its
         // cancel event in the replay, which carries the reason.
         feedOpenRequests(activated)
+        optionsIn(activated)?.let { feed(ChatInput.OptionsRead(it)) }
         val cardsAtSend = cardStatuses()
         val missed = peer.call("session.events.since", sinceParams(live, _state.value.lastSeq)).jsonObject
         val restarted = missed.string("epoch") != epoch

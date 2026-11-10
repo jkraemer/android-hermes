@@ -1,6 +1,8 @@
 package net.jkraemer.hermes.core.chat
 
 import kotlinx.serialization.json.JsonObject
+import net.jkraemer.hermes.core.options.OptionsPatch
+import net.jkraemer.hermes.core.options.SessionOptions
 import net.jkraemer.hermes.core.rpc.RpcFrame
 import java.time.Instant
 
@@ -68,6 +70,8 @@ data class ChatState(
     val items: List<ChatItem> = emptyList(),
     val running: Boolean = false,
     val lastSeq: Long = 0,
+    /** Null until Hermes has told the session's options; a lazy session has none yet. */
+    val options: SessionOptions? = null,
 )
 
 sealed interface ChatInput {
@@ -82,6 +86,12 @@ sealed interface ChatInput {
         val approvalTimeoutSeconds: Long = APPROVAL_TIMEOUT_SECONDS,
     ) : ChatInput
     data class Answered(val requestId: String, val label: String) : ChatInput
+
+    /** The options Hermes reported for the session, replacing what the chat knew. */
+    data class OptionsRead(val options: SessionOptions) : ChatInput
+
+    /** The fields a successful option call reported; ignored while the chat has no options to change. */
+    data class OptionsChanged(val patch: OptionsPatch) : ChatInput
 
     /**
      * The ids of the server requests Hermes reports as still unanswered, and the status of each card

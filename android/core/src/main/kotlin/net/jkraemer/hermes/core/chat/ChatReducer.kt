@@ -8,6 +8,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
+import net.jkraemer.hermes.core.options.patched
+import net.jkraemer.hermes.core.options.sessionOptionsFrom
 import net.jkraemer.hermes.core.rpc.RpcFrame
 import java.time.Instant
 
@@ -17,6 +19,8 @@ fun reduce(state: ChatState, input: ChatInput): ChatState = when (input) {
     is ChatInput.Event -> reduceEvent(state, input.event)
     is ChatInput.Request -> reduceRequest(state, input.request, input.receivedAt, input.approvalTimeoutSeconds)
     is ChatInput.Answered -> state.updateCard(input.requestId) { CardStatus.Answered(input.label) }
+    is ChatInput.OptionsRead -> state.copy(options = input.options)
+    is ChatInput.OptionsChanged -> state.copy(options = state.options?.patched(input.patch))
     is ChatInput.OpenRequests -> reconcileCards(state, input.ids, input.cardsAtSend)
 }
 
@@ -96,6 +100,7 @@ private fun applyEvent(state: ChatState, event: RpcFrame.Event): ChatState {
             if (items.any { it is ChatItem.Assistant && it.streaming }) state.copy(items = items)
             else state.copy(items = items + ChatItem.Assistant("", streaming = true))
         }
+        "session.info" -> sessionOptionsFrom(payload)?.let { state.copy(options = it) } ?: state
         "message.delta" -> appendDelta(state, payload["text"].string() ?: "")
         "message.complete" -> completeMessage(state, payload)
         "error" -> state.copy(items = withoutEmptyStreaming(state.items) + ChatItem.Error(payload["message"].string() ?: "error"), running = false)
