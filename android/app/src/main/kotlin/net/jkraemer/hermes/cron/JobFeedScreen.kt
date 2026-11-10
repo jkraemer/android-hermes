@@ -114,6 +114,7 @@ fun JobFeedScreen(
                 prefill = null,
                 onPrefillShown = {},
                 commands = null,
+                slashMenu = false,
                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
             )
         }

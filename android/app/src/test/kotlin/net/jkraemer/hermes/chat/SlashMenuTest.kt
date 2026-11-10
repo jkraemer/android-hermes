@@ -45,6 +45,7 @@ class SlashMenuTest {
                     prefill = null,
                     onPrefillShown = {},
                     commands = catalog,
+                    slashMenu = true,
                     onMenuOpened = { menusOpened++ },
                 )
             }

@@ -161,6 +161,7 @@ fun ChatScreen(
                 prefill = (effect as? ChatEffect.Prefill)?.text,
                 onPrefillShown = viewModel::effectHandled,
                 commands = commands,
+                slashMenu = true,
                 onMenuOpened = viewModel::menuOpened,
                 modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } },
             )

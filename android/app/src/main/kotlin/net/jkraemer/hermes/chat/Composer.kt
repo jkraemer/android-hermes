@@ -44,7 +44,7 @@ import net.jkraemer.hermes.sessions.pathIcon
  * The message field with send, or stop while a turn runs. Empty and unfocused it is one pill; focused or holding text
  * it is a card with the field above a row of actions, whose start has the commands button and then [leading]. A text
  * that starts with a slash and has no space yet lists the matching [commands] above the composer; [onMenuOpened]
- * says that list was asked for, [prefill] is text to put into the field, which [onPrefillShown] acknowledges.
+ * says that list was asked for ([slashMenu] false: this composer has no commands, so no button either), [prefill] is text to put into the field, which [onPrefillShown] acknowledges.
  */
 @Composable
 internal fun Composer(
@@ -56,6 +56,7 @@ internal fun Composer(
     prefill: String?,
     onPrefillShown: () -> Unit,
     commands: CommandCatalog?,
+    slashMenu: Boolean,
     modifier: Modifier = Modifier,
     onMenuOpened: () -> Unit = {},
     leading: @Composable RowScope.() -> Unit = {},
@@ -123,7 +124,7 @@ internal fun Composer(
                 }
                 if (expanded) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        CommandsButton(enabled = text.text.isEmpty(), onClick = { text = TextFieldValue("/", TextRange(1)) })
+                        if (slashMenu) CommandsButton(enabled = text.text.isEmpty(), onClick = { text = TextFieldValue("/", TextRange(1)) })
                         leading()
                         Spacer(Modifier.weight(1f))
                         sendOrStop()

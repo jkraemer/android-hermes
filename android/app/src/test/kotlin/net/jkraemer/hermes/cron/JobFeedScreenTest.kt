@@ -210,6 +210,17 @@ class JobFeedScreenTest {
     }
 
     @Test
+    fun theComposerOffersNoCommandsButton() {
+        jobWithRuns()
+        show()
+        waitForEntries(3)
+        compose.onNodeWithTag("composer").performTextInput("hello")
+
+        compose.onNodeWithContentDescription("Send").assertIsEnabled()
+        compose.onAllNodes(SemanticsMatcher.expectValue(androidx.compose.ui.semantics.SemanticsProperties.ContentDescription, listOf("Commands"))).assertCountEquals(0)
+    }
+
+    @Test
     fun sendingAReplyHandsItToTheNewestReportedRun() {
         jobWithRuns()
         show()
