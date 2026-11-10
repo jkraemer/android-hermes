@@ -7,6 +7,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.requestFocus
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.test.assertCountEquals
@@ -67,11 +69,17 @@ class ChatScreenTest {
     private lateinit var seenStore: SeenStore
     private lateinit var focusManager: FocusManager
 
-    private fun show(storedSessionId: String? = "stored1", title: String? = "Morning briefing", cron: Boolean = false) {
+    private fun show(
+        storedSessionId: String? = "stored1",
+        title: String? = "Morning briefing",
+        cron: Boolean = false,
+        restoration: StateRestorationTester? = null,
+    ) {
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-test", Context.MODE_PRIVATE)
         seenStore = SeenStore(prefs)
         viewModel = ChatViewModel(peer, storedSessionId, title, needsAnswer, seenStore) { NOW }
-        compose.setContent {
+        val setContent: (@androidx.compose.runtime.Composable () -> Unit) -> Unit = restoration?.let { it::setContent } ?: compose::setContent
+        setContent {
             focusManager = LocalFocusManager.current
             MaterialTheme {
                 ChatScreen(
@@ -119,9 +127,9 @@ class ChatScreenTest {
         return """{"session_id":"live1","stored_session_id":"stored1","messages":$messages,"running":$running,"open_requests":[]}"""
     }
 
-    private fun showLongChat(pairs: Int) {
+    private fun showLongChat(pairs: Int, restoration: StateRestorationTester? = null) {
         peer.resume = longTranscript(pairs)
-        show()
+        show(restoration = restoration)
         compose.waitUntil(10_000) { viewModel.chat.value.items.size == 2 * pairs }
         // The replies are parsed on Dispatchers.Default, which waitForIdle does not wait for.
         waitForParsedReplies(pairs)
@@ -790,5 +798,32 @@ class ChatScreenTest {
         compose.waitForIdle()
         compose.onNode(endText).assertIsDisplayed()
         compose.onNodeWithContentDescription("Scroll to end").assertDoesNotExist()
+    }
+
+    @Test
+    fun aChatScrolledAwayFromItsEndStaysThereWhenTheScreenIsRecreated() {
+        val restoration = StateRestorationTester(compose)
+        showLongChat(6, restoration)
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        val (paragraph, top) = firstParagraphShown()
+
+        // What a rotation does to the screen's state.
+        restoration.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+
+        assertEquals(paragraph, top, compose.onNodeWithText(paragraph, substring = true).fetchSemanticsNode().positionInRoot.y, 0.5f)
+        compose.onNodeWithContentDescription("Scroll to end").assertIsDisplayed()
+    }
+
+    @Test
+    fun theScrollToEndButtonIsBigEnoughToTap() {
+        showLongChat(6)
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+
+        val touch = compose.onNodeWithContentDescription("Scroll to end").fetchSemanticsNode().touchBoundsInRoot
+        val minimum = with(compose.density) { 48.dp.toPx() }
+        assertTrue("touch area ${touch.width} x ${touch.height} px, at least $minimum px", touch.width >= minimum && touch.height >= minimum)
     }
 }

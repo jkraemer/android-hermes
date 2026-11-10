@@ -183,7 +183,8 @@ private fun OpenFailedBanner(onRetry: () -> Unit) {
 private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatViewModel, clock: () -> Instant, composerHeight: Dp, modifier: Modifier) {
     val listState = rememberLazyListState()
     val parsedReplies by viewModel.parsedReplies.collectAsStateWithLifecycle()
-    val following = remember { mutableStateOf(true) }
+    // Saved with the list's position, so a rotation keeps a chat scrolled away from its end where it was.
+    val following = rememberSaveable { mutableStateOf(true) }
     val glide = remember { mutableStateOf(false) }
     FollowTheEnd(listState, following, glide)
     val awayFromTheEnd by remember { derivedStateOf { !following.value && listState.canScrollForward } }
