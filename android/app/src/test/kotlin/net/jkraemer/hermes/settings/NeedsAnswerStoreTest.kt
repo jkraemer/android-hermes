@@ -28,23 +28,11 @@ class NeedsAnswerStoreTest {
     }
 
     @Test
-    fun aSessionNeedsAnAnswerUntilItsRequestIsResolved() {
+    fun aRequestAddedAgainIsStoredOnce() {
         store.add("s1", "r1", later(300))
-        store.add("s1", "r2", later(300))
+        store.add("s2", "r1", later(300))
 
-        store.resolve("r1")
-        assertEquals(setOf("s1"), store.sessions.value)
-        store.resolve("r2")
-        assertEquals(emptySet<String>(), store.sessions.value)
-    }
-
-    @Test
-    fun resolvingAnUnknownRequestChangesNothing() {
-        store.add("s1", "r1", later(300))
-
-        store.resolve("other")
-
-        assertEquals(setOf("s1"), store.sessions.value)
+        assertEquals(setOf("s2"), store.sessions.value)
     }
 
     @Test
@@ -90,6 +78,24 @@ class NeedsAnswerStoreTest {
     fun entriesThatExpiredBeforeARestartAreNotLoaded() {
         store.add("s1", "r1", later(300))
         now = later(300)
+
+        assertEquals(emptySet<String>(), NeedsAnswerStore(prefs) { now }.sessions.value)
+    }
+
+    @Test
+    fun unreadableStoredEntriesAreTreatedAsEmpty() {
+        prefs.edit().putString("needs_answer", "{not json").commit()
+
+        val reloaded = NeedsAnswerStore(prefs) { now }
+
+        assertEquals(emptySet<String>(), reloaded.sessions.value)
+        reloaded.add("s1", "r1", later(300))
+        assertEquals(setOf("s1"), reloaded.sessions.value)
+    }
+
+    @Test
+    fun entriesOfAnOldShapeAreTreatedAsEmpty() {
+        prefs.edit().putString("needs_answer", """[{"session":"s1"}]""").commit()
 
         assertEquals(emptySet<String>(), NeedsAnswerStore(prefs) { now }.sessions.value)
     }

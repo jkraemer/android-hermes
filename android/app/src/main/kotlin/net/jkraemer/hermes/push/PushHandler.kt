@@ -23,10 +23,12 @@ import kotlin.time.Duration.Companion.seconds
 /**
  * What [HermesPushService] does with the distributor's events; the service itself needs the connector's KeyStore code.
  * [openSessionId] is the stored id of the chat on screen and [fullOutput] fetches a cron run's complete report.
- * The connector normally calls [onMessage] on its own thread while it holds a wake lock for about 10 s, so off the
- * main thread a push is handled to the end before [onMessage] returns (the report fetch is bounded by
- * [fullOutputTimeout]). The first message after the process started arrives on the main thread, after the wake lock
- * is gone: there it is handled in [scope], best effort, and [onMessage] returns at once.
+ * On a phone the process is usually dead between pushes, so the common case is the first message after the process
+ * started: it arrives on the main thread, after the connector's wake lock is gone, and is handled in [scope], best
+ * effort, with [onMessage] returning at once. Only the report fetch of a rule that matches on the full output is at
+ * risk there, as the device may sleep before it completes. While the process lives, the connector calls [onMessage]
+ * on its own thread under a wake lock of about 10 s; there a push is handled to the end before [onMessage] returns
+ * (the report fetch is bounded by [fullOutputTimeout]).
  */
 class PushHandler(
     private val registration: PushRegistration,

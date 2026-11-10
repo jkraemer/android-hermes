@@ -26,8 +26,6 @@ class NeedsAnswerStore(private val prefs: SharedPreferences, private val clock: 
     fun add(sessionId: String, requestId: String, deadline: Instant) =
         change { entries -> entries.filter { it.requestId != requestId } + Entry(sessionId, requestId, deadline) }
 
-    fun resolve(requestId: String) = change { entries -> entries.filter { it.requestId != requestId } }
-
     fun clearSession(sessionId: String) = change { entries -> entries.filter { it.sessionId != sessionId } }
 
     /** Forgets the requests whose deadline has passed; nothing else does so while no push or chat touches the store. */
@@ -41,13 +39,16 @@ class NeedsAnswerStore(private val prefs: SharedPreferences, private val clock: 
         _sessions.value = entries.map { it.sessionId }.toSet()
     }
 
+    // A value that cannot be read (damaged, or stored by another version) counts as empty: it must not crash every start.
     private fun load(): List<Entry> {
         val stored = prefs.getString(ENTRIES_KEY, null) ?: return emptyList()
-        val array = JSONArray(stored)
-        return (0 until array.length()).map { index ->
-            val entry = array.getJSONObject(index)
-            Entry(entry.getString("session"), entry.getString("request"), Instant.ofEpochMilli(entry.getLong("deadline")))
-        }
+        return runCatching {
+            val array = JSONArray(stored)
+            (0 until array.length()).map { index ->
+                val entry = array.getJSONObject(index)
+                Entry(entry.getString("session"), entry.getString("request"), Instant.ofEpochMilli(entry.getLong("deadline")))
+            }
+        }.getOrDefault(emptyList())
     }
 
     private fun save(entries: List<Entry>): String =
