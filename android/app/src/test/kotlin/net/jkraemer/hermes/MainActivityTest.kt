@@ -643,8 +643,11 @@ class MainActivityTest {
     fun theWindowResizesForTheKeyboardSoComposeAppliesItsInsetOnlyOnce() {
         val app = RuntimeEnvironment.getApplication()
         val info = app.packageManager.getActivityInfo(android.content.ComponentName(app, MainActivity::class.java), 0)
+        // The manifest's adjustResize is what is checked; the constant is deprecated only for setting it in code.
+        @Suppress("DEPRECATION")
+        val adjustResize = android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         assertEquals(
-            android.view.WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE,
+            adjustResize,
             info.softInputMode and android.view.WindowManager.LayoutParams.SOFT_INPUT_MASK_ADJUST,
         )
     }
