@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -54,7 +55,10 @@ class NeedsAnswerStore(private val prefs: SharedPreferences, private val clock: 
             entries.map { JSONObject().put("session", it.sessionId).put("request", it.requestId).put("deadline", it.deadline.toEpochMilli()) },
         ).toString()
 
-    private companion object {
-        const val ENTRIES_KEY = "needs_answer"
+    companion object {
+        private const val ENTRIES_KEY = "needs_answer"
+
+        /** How long a question stays unanswered before it no longer counts. */
+        val CLARIFY_TIMEOUT: Duration = Duration.ofHours(1)
     }
 }

@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import net.jkraemer.hermes.core.chat.ApprovalChoice
 import net.jkraemer.hermes.core.options.ModelRef
 import net.jkraemer.hermes.core.rpc.ConnectionState
+import net.jkraemer.hermes.core.chat.ChatItem
 import net.jkraemer.hermes.settings.NeedsAnswerStore
 import net.jkraemer.hermes.settings.SeenStore
 import org.junit.Assert.assertEquals
@@ -28,6 +29,11 @@ private const val OPEN_APPROVAL =
     """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":true,"open_requests":[
         {"id":"srq-1","method":"approval","params":{"session_id":"live1","request_id":"r1","command":"rm x"}}]}"""
 
+private const val OPEN_CLARIFY =
+    """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":true,"open_requests":[
+        {"id":"srq-2","method":"clarify","params":{"session_id":"live1","questions":[
+          {"qid":"q1","question":"Colour?","choices":["red"],"multi_select":false}]}}]}"""
+
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ChatViewModelTest {
@@ -35,6 +41,7 @@ class ChatViewModelTest {
     private val needsAnswer = MutableStateFlow(emptySet<String>())
     private lateinit var seenStore: SeenStore
     private lateinit var pushed: NeedsAnswerStore
+    private var storeNow = NOW
     private val visibleSession = MutableStateFlow<String?>(null)
 
     @Before
@@ -42,7 +49,7 @@ class ChatViewModelTest {
         val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("hermes-vm-test", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
         seenStore = SeenStore(prefs)
-        pushed = NeedsAnswerStore(prefs) { NOW }
+        pushed = NeedsAnswerStore(prefs) { storeNow }
     }
 
     private fun viewModel(id: String? = "stored1", pendingMessage: String? = null) =
@@ -113,15 +120,69 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun aChatClosedWithAnOpenCardKeepsItsSessionInNeedsAnswer() {
+    fun aChatClosedWithAnOpenApprovalHandsItToThePushStoreUntilItsDeadline() {
         peer.resume = OPEN_APPROVAL
         val chat = viewModel()
         settle()
-        assertEquals(setOf("stored1"), needsAnswer.value)
+        val deadline = chat.chat.value.items.filterIsInstance<ChatItem.Approval>().single().deadline
 
         chat.close()
 
-        assertEquals(setOf("stored1"), needsAnswer.value)
+        assertEquals(emptySet<String>(), needsAnswer.value)
+        assertEquals(setOf("stored1"), pushed.sessions.value)
+        storeNow = deadline.minusSeconds(1)
+        pushed.dropExpired()
+        assertEquals(setOf("stored1"), pushed.sessions.value)
+        storeNow = deadline
+        pushed.dropExpired()
+        assertEquals(emptySet<String>(), pushed.sessions.value)
+    }
+
+    @Test
+    fun aChatClosedWithAnOpenQuestionHandsItToThePushStoreForAnHour() {
+        peer.resume = OPEN_CLARIFY
+        val chat = viewModel()
+        settle()
+
+        chat.close()
+
+        assertEquals(emptySet<String>(), needsAnswer.value)
+        storeNow = NOW.plusSeconds(3599)
+        pushed.dropExpired()
+        assertEquals(setOf("stored1"), pushed.sessions.value)
+        storeNow = NOW.plusSeconds(3600)
+        pushed.dropExpired()
+        assertEquals(emptySet<String>(), pushed.sessions.value)
+    }
+
+    @Test
+    fun theChatsPushedSessionIsNotClearedWhileItsRequestsAreStillLoading() {
+        peer.resume = OPEN_APPROVAL
+        pushed.add("stored1", "r1", NOW.plusSeconds(300))
+        val gate = CompletableDeferred<Unit>()
+        peer.openGate = gate
+        viewModel()
+        settle()
+
+        Thread { gate.complete(Unit) }.start()
+        settleUntil { needsAnswer.value.contains("stored1") }
+        settle()
+
+        assertEquals(setOf("stored1"), pushed.sessions.value)
+    }
+
+    @Test
+    fun aChatOpenedWithoutOpenRequestsClearsThePushedSessionOnceOpen() {
+        peer.resume = """{"session_id":"live1","stored_session_id":"stored1","messages":[],"running":false,"open_requests":[]}"""
+        pushed.add("stored1", "r1", NOW.plusSeconds(300))
+        val gate = CompletableDeferred<Unit>()
+        peer.openGate = gate
+        viewModel()
+        settle()
+        assertEquals(setOf("stored1"), pushed.sessions.value)
+
+        Thread { gate.complete(Unit) }.start()
+        settleUntil { pushed.sessions.value.isEmpty() }
     }
 
     @Test

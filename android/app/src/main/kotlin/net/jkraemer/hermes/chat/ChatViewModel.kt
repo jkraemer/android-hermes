@@ -67,9 +67,10 @@ data class PendingModel(val message: String, val inChat: Boolean = true, val ret
 /**
  * One opened chat. [storedSessionId] null starts a new one. Opens the session once the
  * connection is ready (and again after a failed open, when it next becomes ready), and keeps
- * [needsAnswer] and [seenStore] current for the session while it lives. A session with an open card stays in
- * [needsAnswer] when the chat is closed, until a chat of it shows no open card. Such a chat also clears the session
- * from [pushed], the sessions a push announced. [visibleSession] holds the stored id of the chat on screen.
+ * [needsAnswer] and [seenStore] current for the session while it lives. A chat closed with open cards hands them to
+ * [pushed], the requests waiting for an answer, so the session stays in "Needs answer" until they expire or a push
+ * resolves them; an open chat that shows no open card clears its session from [pushed]. [visibleSession] holds the
+ * stored id of the chat on screen.
  * [pendingMessage], if any, is sent once the session is open.
  */
 class ChatViewModel(
@@ -202,6 +203,7 @@ class ChatViewModel(
         guarded("Couldn't open the chat") {
             if (storedSessionId != null) controller.open(storedSessionId) else controller.startNew()
             opened = true
+            clearPushedWhenSettled(chat.value)
         }
         _openFailed.value = !opened
         if (opened) loadCatalog()
@@ -216,15 +218,23 @@ class ChatViewModel(
     }
 
     private fun onChatChanged(state: ChatState) {
-        val needsAnswerNow = state.items.any { it is ChatItem.Approval && it.status == CardStatus.Open || it is ChatItem.Clarify && it.status == CardStatus.Open }
+        val needsAnswerNow = state.items.any { it.isOpenCard() }
         val id = state.storedSessionId
         if (id != registeredId) {
             registeredId?.let { old -> needsAnswer.update { it - old } }
             registeredId = id
         }
         id?.let { stored -> needsAnswer.update { if (needsAnswerNow) it + stored else it - stored } }
-        if (id != null && !needsAnswerNow) pushed?.clearSession(id)
+        clearPushedWhenSettled(state)
     }
+
+    /** Only once the open is complete: before that the transcript is shown without the requests still to be fed in. */
+    private fun clearPushedWhenSettled(state: ChatState) {
+        val id = state.storedSessionId
+        if (opened && id != null && state.items.none { it.isOpenCard() }) pushed?.clearSession(id)
+    }
+
+    private fun ChatItem.isOpenCard() = this is ChatItem.Approval && status == CardStatus.Open || this is ChatItem.Clarify && status == CardStatus.Open
 
     /** A streaming reply changes with every delta, so only finished ones are parsed. */
     private fun parseFinishedReplies(items: List<ChatItem>) {
@@ -382,12 +392,25 @@ class ChatViewModel(
      */
     val hasStoredSession: Boolean get() = storedSessionId != null || chat.value.items.isNotEmpty()
 
-    /** Stops the controller; safe to call again. */
+    /** Stops the controller, handing its open cards to [pushed]; safe to call again. */
     fun close() {
         work.cancel()
+        handOpenCardsToPushedStore()
         setVisibleSession(null)
         registeredId = null
         controller.close()
+    }
+
+    private fun handOpenCardsToPushedStore() {
+        val id = registeredId
+        if (pushed == null || id == null) return
+        for (item in chat.value.items) {
+            when {
+                item is ChatItem.Approval && item.status == CardStatus.Open -> pushed.add(id, item.requestId, item.deadline)
+                item is ChatItem.Clarify && item.status == CardStatus.Open -> pushed.add(id, item.requestId, clock() + NeedsAnswerStore.CLARIFY_TIMEOUT)
+            }
+        }
+        needsAnswer.update { it - id }
     }
 
     override fun onCleared() = close()

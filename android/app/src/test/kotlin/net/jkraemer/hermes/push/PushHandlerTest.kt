@@ -28,6 +28,7 @@ import net.jkraemer.hermes.settings.NeedsAnswerStore
 import java.time.Instant
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.time.Duration.Companion.milliseconds
 
 private object NoDistributor : PushDistributor {
@@ -57,6 +58,7 @@ class PushHandlerTest {
     private val prefs = RuntimeEnvironment.getApplication().getSharedPreferences("push-handler-test", Context.MODE_PRIVATE).also { it.edit().clear().commit() }
     private var now = Instant.parse("2026-11-10T12:00:00Z")
     private val needsAnswer = NeedsAnswerStore(prefs) { now }
+    private val chatsNeedingAnswer = MutableStateFlow(emptySet<String>())
     private val notifications = RecordingNotifications()
     private val logged = mutableListOf<String>()
     private var openSessionId: String? = null
@@ -65,8 +67,8 @@ class PushHandlerTest {
 
     // Unconfined runs onMessage's work to completion before it returns, as long as nothing suspends for real.
     private val handler = PushHandler(
-        registration, needsAnswer, notifications, { rule }, { openSessionId }, { fullReport }, CoroutineScope(Dispatchers.Unconfined),
-        log = { logged += it }, clock = { now },
+        registration, needsAnswer, chatsNeedingAnswer, notifications, { rule }, { openSessionId }, { fullReport }, CoroutineScope(Dispatchers.Unconfined),
+        log = { logged += it }, clock = { now }, onMainThread = { false },
     )
 
     private fun approval(requestId: String) = """{"v":1,"type":"approval","session_id":"s1","request_id":"$requestId","text":"rm x"}"""
@@ -163,6 +165,37 @@ class PushHandlerTest {
     }
 
     @Test
+    fun aResolvedPushClearsItsWholeSessionFromNeedsAnswer() {
+        chatsNeedingAnswer.value = setOf("s1", "s2")
+        handler.onMessage(approval("a1").toByteArray(), decrypted = true)
+
+        handler.onMessage("""{"v":1,"type":"resolved","session_id":"s1","request_id":"other-id"}""".toByteArray(), decrypted = true)
+
+        assertEquals(emptySet<String>(), needsAnswer.sessions.value)
+        assertEquals(setOf("s2"), chatsNeedingAnswer.value)
+    }
+
+    @Test
+    fun offTheMainThreadAPushIsHandledBeforeOnMessageReturns() {
+        val cancelled = CoroutineScope(SupervisorJob()).also { it.cancel() }
+        val offMain = PushHandler(registration, needsAnswer, chatsNeedingAnswer, notifications, { rule }, { openSessionId }, { fullReport }, cancelled, onMainThread = { false })
+
+        offMain.onMessage(approval("a1").toByteArray(), decrypted = true)
+
+        assertEquals(listOf("show request:a1 APPROVALS Approval needed rm x s1"), notifications.calls)
+    }
+
+    @Test
+    fun onTheMainThreadAPushIsHandledInTheAppScope() {
+        val onMain = PushHandler(registration, needsAnswer, chatsNeedingAnswer, notifications, { rule }, { openSessionId }, { fullReport }, scope, onMainThread = { true })
+
+        onMain.onMessage(approval("a1").toByteArray(), decrypted = true)
+
+        runBlocking { withTimeout(10_000) { while (notifications.calls.isEmpty()) delay(10) } }
+        assertEquals(listOf("show request:a1 APPROVALS Approval needed rm x s1"), notifications.calls)
+    }
+
+    @Test
     fun anApprovalExpiresAfterFiveMinutesAndAQuestionAfterAnHour() {
         handler.onMessage(approval("a1").toByteArray(), decrypted = true)
         handler.onMessage("""{"v":1,"type":"clarify","session_id":"s2","request_id":"c1","text":"Which?"}""".toByteArray(), decrypted = true)
@@ -221,7 +254,7 @@ class PushHandlerTest {
     fun aReportThatTakesTooLongToFetchFallsBackToThePreview() {
         rule = NotificationRule.Match("ALERT")
         fullReport = null
-        val slow = PushHandler(registration, needsAnswer, notifications, { rule }, { openSessionId }, { awaitCancellation() }, scope, fullOutputTimeout = 50.milliseconds)
+        val slow = PushHandler(registration, needsAnswer, chatsNeedingAnswer, notifications, { rule }, { openSessionId }, { awaitCancellation() }, scope, onMainThread = { true }, fullOutputTimeout = 50.milliseconds)
 
         slow.onMessage("""{"v":1,"type":"cron","session_id":"s9","job_id":"j1","job_name":"Nightly","text":"ALERT in preview"}""".toByteArray(), decrypted = true)
 

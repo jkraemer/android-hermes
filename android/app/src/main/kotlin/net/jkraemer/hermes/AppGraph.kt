@@ -191,6 +191,7 @@ class AppGraph(private val context: Context) {
     val pushHandler = PushHandler(
         pushRegistration,
         pushedNeedsAnswer,
+        chatsNeedingAnswer,
         Notifier(context),
         // Until each cron job has a rule of its own, every report is announced.
         { NotificationRule.Always },
