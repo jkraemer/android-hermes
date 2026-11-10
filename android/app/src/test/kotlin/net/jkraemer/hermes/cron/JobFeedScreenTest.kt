@@ -13,9 +13,6 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.hasText
-import androidx.compose.ui.test.isSelectable
-import androidx.compose.ui.test.isSelected
-import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -32,6 +29,8 @@ import net.jkraemer.hermes.sessions.cronRun
 import net.jkraemer.hermes.settings.SeenStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,6 +43,8 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 
+private const val USE_REQUESTED_SIZE = "robolectric.windowManager.useRequestedSize"
+
 private val NOW = ZonedDateTime.of(2026, 11, 7, 12, 0, 0, 0, ZoneOffset.UTC).toInstant()
 
 private fun at(day: Int, hour: Int, minute: Int): Instant = ZonedDateTime.of(2026, 11, day, hour, minute, 0, 0, ZoneOffset.UTC).toInstant()
@@ -52,6 +53,16 @@ private fun at(day: Int, hour: Int, minute: Int): Instant = ZonedDateTime.of(202
 @Config(sdk = [35], qualifiers = "w411dp-h2000dp")
 class JobFeedScreenTest {
     @get:Rule val compose = createComposeRule()
+
+    // Robolectric gives a wrap-content window the full display width unless told otherwise; a dialog over this
+    // wider-than-320dp screen then flips between two widths on every layout pass and Compose never goes idle.
+    @Before fun sizeWindowsAsRequested() {
+        System.setProperty(USE_REQUESTED_SIZE, "true")
+    }
+
+    @After fun resetWindowSizing() {
+        System.clearProperty(USE_REQUESTED_SIZE)
+    }
 
     private val source = FakeSource()
     private val openedRuns = mutableListOf<String>()
@@ -340,6 +351,37 @@ class JobFeedScreenTest {
 
         assertEquals(listOf<NotificationRule>(NotificationRule.Off), savedRules)
         compose.onNodeWithText("Notifications for Attention Check").assertDoesNotExist()
+    }
+
+    @Test
+    fun aTypedExpressionIsSavedAsAMatchRule() {
+        jobWithRuns()
+        show()
+        openDialog()
+        compose.onNodeWithText("Only when the report matches").performClick()
+        compose.onNodeWithTag("rule-field").performTextInput("ALERT|FAIL")
+        compose.onNodeWithText("Save").performClick()
+
+        assertEquals(listOf<NotificationRule>(NotificationRule.Match("ALERT|FAIL")), savedRules)
+    }
+
+    @Test
+    fun theStoredExpressionIsShownAndAnInvalidOneBlocksSave() {
+        jobWithRuns()
+        currentRule = NotificationRule.Match("ALERT")
+        show()
+        openDialog()
+        compose.onNodeWithTag("rule-field").assertTextEquals("Regular expression", "ALERT")
+
+        compose.onNodeWithTag("rule-field").performTextClearance()
+        compose.onNodeWithTag("rule-field").performTextInput("(")
+        compose.onNodeWithText("Not a valid regular expression").assertIsDisplayed()
+        compose.onNodeWithText("Save").assertIsNotEnabled()
+
+        compose.onNodeWithTag("rule-field").performTextClearance()
+        compose.onNodeWithTag("rule-field").performTextInput("fine")
+        compose.onNodeWithText("Save").assertIsEnabled()
+        assertEquals(emptyList<NotificationRule>(), savedRules)
     }
 
     @Test
