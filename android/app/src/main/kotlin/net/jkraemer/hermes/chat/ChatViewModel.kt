@@ -14,6 +14,7 @@ import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
@@ -71,7 +72,8 @@ data class PendingModel(val message: String, val inChat: Boolean = true, val ret
  * [pushed], the requests waiting for an answer, so the session stays in "Needs answer" until they expire or a push
  * resolves them; an open chat that shows no open card clears its session from [pushed]. [visibleSession] holds the
  * stored id of the chat on screen.
- * [pendingMessage], if any, is sent once the session is open.
+ * [pendingMessage], if any, is sent once the session is open. The first message sent makes the chat [follow] its stored
+ * session, again if the stored id changes.
  */
 class ChatViewModel(
     private val peer: RpcPeer,
@@ -81,10 +83,12 @@ class ChatViewModel(
     private val seenStore: SeenStore,
     private val pushed: NeedsAnswerStore? = null,
     private val visibleSession: MutableStateFlow<String?>? = null,
-    log: HermesLog = HermesLog.None,
+    private val log: HermesLog = HermesLog.None,
     private val pendingMessage: String? = null,
     /** The models the user keeps at hand for the options sheet. */
     val favorites: StateFlow<List<ModelRef>> = MutableStateFlow(emptyList()),
+    /** Tells the server the session is an app chat, so its replies are pushed. */
+    private val follow: suspend (String) -> Unit = {},
     private val clock: () -> Instant = Instant::now,
 ) : ViewModel() {
     // Everything this chat runs hangs off one job so close() can stop it all, the open in flight included.
@@ -153,6 +157,9 @@ class ChatViewModel(
 
     /** The stored id this chat has needsAnswer registered under. */
     private var registeredId: String? = null
+
+    /** The stored id [follow] last succeeded or is running for. */
+    private var followedId: String? = null
 
     init {
         scope.launch { openWhenReady() }
@@ -269,6 +276,7 @@ class ChatViewModel(
 
     /** A command is never sent to the model as text, so text shaped like one waits for the catalogue that says whether it is. */
     fun send(text: String) = launchGuarded("Couldn't send") {
+        scope.launch { followStoredSession() }
         val command = parseSlashCommand(text)
         if (command == null) {
             controller.send(text)
@@ -281,6 +289,21 @@ class ChatViewModel(
             controller.send(text)
         } else {
             handle(controller.runCommand(command, catalog))
+        }
+    }
+
+    /** Waits for the stored id rather than the send, so following never delays it; a failure is logged and tried again with the next message. */
+    private suspend fun followStoredSession() {
+        val id = chat.first { it.storedSessionId != null }.storedSessionId ?: return
+        if (id == followedId) return
+        followedId = id
+        try {
+            follow(id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            followedId = null
+            log.log("Couldn't follow the session: ${e::class.simpleName}")
         }
     }
 

@@ -52,8 +52,14 @@ class ChatViewModelTest {
         pushed = NeedsAnswerStore(prefs) { storeNow }
     }
 
+    private val followed = mutableListOf<String>()
+    private var followFailure: Exception? = null
+
     private fun viewModel(id: String? = "stored1", pendingMessage: String? = null) =
-        ChatViewModel(peer, id, null, needsAnswer, seenStore, pendingMessage = pendingMessage, pushed = pushed, visibleSession = visibleSession) { NOW }
+        ChatViewModel(
+            peer, id, null, needsAnswer, seenStore, pendingMessage = pendingMessage, pushed = pushed, visibleSession = visibleSession,
+            follow = { sessionId -> followFailure?.let { throw it }; followed += sessionId },
+        ) { NOW }
 
     private fun submitted() = peer.calls.filter { it.first == "prompt.submit" }.map { (it.second["text"] as kotlinx.serialization.json.JsonPrimitive).content }
 
@@ -502,5 +508,81 @@ class ChatViewModelTest {
 
         chat.send("next")
         settleUntil { !chat.switchDeferred.value }
+    }
+
+    @Test
+    fun aNewChatFollowsItsStoredSessionWhenTheFirstMessageIsSent() {
+        val chat = viewModel(id = null)
+        settleUntil { chat.chat.value.storedSessionId != null }
+        assertEquals(emptyList<String>(), followed)
+
+        chat.send("hello")
+        settleUntil { followed.isNotEmpty() }
+
+        assertEquals(listOf("stored1"), followed)
+    }
+
+    @Test
+    fun furtherMessagesDoNotFollowAgain() {
+        val chat = viewModel()
+        settleUntil { chat.chat.value.storedSessionId != null }
+
+        chat.send("one")
+        settleUntil { followed.isNotEmpty() }
+        chat.send("two")
+        settleUntil { submitted().size == 2 }
+        settle()
+
+        assertEquals(listOf("stored1"), followed)
+    }
+
+    @Test
+    fun aCommandFollowsToo() {
+        val chat = viewModel()
+        settleUntil { chat.commands.value != null }
+
+        chat.send("/title Hi")
+        settleUntil { followed.isNotEmpty() }
+
+        assertEquals(listOf("stored1"), followed)
+    }
+
+    @Test
+    fun openingAChatWithoutSendingFollowsNothing() {
+        val chat = viewModel()
+        settleUntil { chat.chat.value.storedSessionId != null }
+        settle()
+
+        assertEquals(emptyList<String>(), followed)
+    }
+
+    @Test
+    fun aFailingFollowStillSendsTheMessageWithoutAMessage() {
+        followFailure = java.io.IOException("offline")
+        val chat = viewModel()
+        settleUntil { chat.chat.value.storedSessionId != null }
+
+        chat.send("hello")
+        settleUntil { submitted().isNotEmpty() }
+        settle()
+
+        assertEquals(listOf("hello"), submitted())
+        assertNull(chat.message.value)
+    }
+
+    @Test
+    fun aFollowThatFailedIsTriedAgainWithTheNextMessage() {
+        followFailure = java.io.IOException("offline")
+        val chat = viewModel()
+        settleUntil { chat.chat.value.storedSessionId != null }
+        chat.send("one")
+        settleUntil { submitted().size == 1 }
+        settle()
+
+        followFailure = null
+        chat.send("two")
+        settleUntil { followed.isNotEmpty() }
+
+        assertEquals(listOf("stored1"), followed)
     }
 }

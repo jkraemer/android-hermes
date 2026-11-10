@@ -214,6 +214,7 @@ private fun SessionsAndChat(graph: AppGraph, current: Screen, show: (Screen) -> 
             ChatViewModel(
                 graph.rpc, open.storedSessionId, open.title, graph.chatsNeedingAnswer, graph.seenStore, graph.pushedNeedsAnswer, graph.visibleSessionId,
                 log = graph.log, pendingMessage = open.pendingMessage, favorites = graph.favoritesStore.favorites,
+                follow = { graph.pushApi.follow(it) },
             )
         }
     }
