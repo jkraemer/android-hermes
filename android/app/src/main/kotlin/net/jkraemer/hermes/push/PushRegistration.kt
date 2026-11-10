@@ -69,7 +69,9 @@ class PushRegistration(
 
     private fun register(context: Context, found: Boolean) {
         if (found) {
-            // A registration that is already through stays shown as such; the distributor answers again only if something changed.
+            // The UnifiedPush Android spec requires a distributor to send NEW_ENDPOINT whenever an app registers, even with
+            // an unchanged endpoint (unifiedpush.org/developers/spec/android), so Registering ends with the next endpoint.
+            // A registration that is already On stays On, which shows a stale On if the distributor silently dropped it.
             markRegistering()
             distributor.register(context, MESSAGE_FOR_DISTRIBUTOR)
         } else {

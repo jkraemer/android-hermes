@@ -63,11 +63,48 @@ class PushRegistrationTest {
     }
 
     @Test
-    fun aFoundDistributorThatNeverAnswersStaysRegistering() {
+    fun aDistributorFoundAfterNoneIsRegisteringUntilItAnswers() {
+        distributor.available = false
         registration.start(activity)
-        Thread.sleep(200)
+        assertEquals(PushStatus.NoDistributor, registration.status.value)
+
+        distributor.available = true
+        registration.start(activity)
+
+        // The fake distributor never answers, so nothing but start() can have changed the status.
+        assertEquals(PushStatus.Registering, registration.status.value)
+    }
+
+    @Test
+    fun aDistributorPickedAfterNoneIsRegisteringUntilItAnswers() {
+        distributor.available = false
+        registration.pickDistributor(activity)
+        assertEquals(PushStatus.NoDistributor, registration.status.value)
+
+        distributor.available = true
+        registration.pickDistributor(activity)
 
         assertEquals(PushStatus.Registering, registration.status.value)
+    }
+
+    @Test
+    fun startingAgainAfterAFailureIsRegisteringUntilItAnswers() {
+        registration.onRegistrationFailed("NETWORK")
+
+        registration.start(activity)
+
+        assertEquals(PushStatus.Registering, registration.status.value)
+    }
+
+    @Test
+    fun startingWhileOnStaysOn() {
+        server.enqueue(MockResponse().setResponseCode(204))
+        registration.onEndpoint("https://ntfy.sh/up1?up=1", "k", "a")
+        awaitStatus(PushStatus.On)
+
+        registration.start(activity)
+
+        assertEquals(PushStatus.On, registration.status.value)
     }
 
     @Test
