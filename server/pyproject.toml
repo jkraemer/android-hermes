@@ -20,3 +20,5 @@ package = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Starlette's TestClient warns that httpx is deprecated for it; httpx is the plugin's pinned runtime client.
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]
