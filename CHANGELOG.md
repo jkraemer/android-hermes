@@ -13,11 +13,13 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
   YOLO on or off. These options only change the current chat; Hermes' default
   stays as it is.
 - Typing /model, /reasoning, /fast or /yolo with arguments works as it does in
-  Hermes: it applies to the current chat only, unless you add --global, for
-  example /model <name> --global, which changes Hermes' default. Without
-  arguments they open the session options.
-- Settings has a new "Favorite models" screen: search Hermes' models, star
-  the ones you want, and drag them into the order the options sheet shows.
+  Hermes. /reasoning, /fast and /yolo apply to the current chat only, unless
+  you add --global. /model follows Hermes' own rules: --global changes
+  Hermes' default, --session keeps the change to this chat. Without arguments
+  they open the session options, which always change only the current chat.
+- Settings has a new "Favorite models" screen (stored on this phone): search
+  Hermes' models, star the ones you want, and drag them into the order the
+  options sheet shows.
 
 ## [0.2.2] - 2026-11-10
 
