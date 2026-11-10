@@ -283,6 +283,25 @@ class ChatControllerOptionsTest {
     }
 
     @Test
+    fun globalYoloOnMarksApprovalsOff() = test(configSet = """{"value":"1","scope":"global"}""") { _, chat ->
+        chat.runOptionCommand("yolo", "on --global")
+        assertEquals(BASE.copy(yolo = true, approvalsOff = true), options(chat))
+    }
+
+    @Test
+    fun globalYoloOffClearsApprovalsOff() = test(info = """{"model":"a","provider":"p","reasoning_effort":"","fast":false,"yolo":true,"approval_mode":"off"}""") { peer, chat ->
+        peer.on("config.set", """{"value":"0","scope":"global"}""")
+        chat.runOptionCommand("yolo", "off --global")
+        assertEquals(BASE, options(chat))
+    }
+
+    @Test
+    fun sessionYoloLeavesApprovalsAlone() = test(configSet = """{"value":"1","scope":"session"}""") { _, chat ->
+        chat.runOptionCommand("yolo", "on")
+        assertEquals(BASE.copy(yolo = true), options(chat))
+    }
+
+    @Test
     fun yoloStaysOnWhileApprovalsAreOff() = test(info = """{"model":"a","provider":"p","reasoning_effort":"","fast":false,"yolo":true,"approval_mode":"off"}""") { peer, chat ->
         peer.on("config.set", """{"key":"yolo","value":"0","scope":"session"}""")
         chat.setYolo(false)

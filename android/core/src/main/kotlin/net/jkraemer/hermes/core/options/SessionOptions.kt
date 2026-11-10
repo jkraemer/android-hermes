@@ -29,6 +29,7 @@ data class OptionsPatch(
     val reasoning: String? = null,
     val fast: Boolean? = null,
     val yolo: Boolean? = null,
+    val approvalsOff: Boolean? = null,
 )
 
 /** The reasoning levels the options sheet offers; the display words of `/reasoning` (show, hide, ...) are not levels. */
@@ -52,8 +53,8 @@ internal fun SessionOptions.patched(patch: OptionsPatch) = SessionOptions(
     provider = patch.provider ?: provider,
     reasoning = patch.reasoning ?: reasoning,
     fast = patch.fast ?: fast,
-    yolo = patch.yolo?.let { it || approvalsOff } ?: yolo,
-    approvalsOff = approvalsOff,
+    yolo = patch.yolo?.let { it || (patch.approvalsOff ?: approvalsOff) } ?: yolo,
+    approvalsOff = patch.approvalsOff ?: approvalsOff,
 )
 
 sealed interface ModelSwitch {
@@ -114,7 +115,9 @@ suspend fun ChatController.runOptionCommand(key: String, arg: String): OptionCha
         if (global && key != "fast") put("scope", "global")
     })
     val reported = result.text("value").orEmpty()
-    applyOptions(optionsPatchFor(key, reported))
+    // A global YOLO is Hermes' approvals mode; no session.info need follow when the session has no agent yet.
+    val patch = optionsPatchFor(key, reported)
+    applyOptions(if (global && key == "yolo") patch.copy(approvalsOff = patch.yolo) else patch)
     return OptionChange(reported, global)
 }
 
