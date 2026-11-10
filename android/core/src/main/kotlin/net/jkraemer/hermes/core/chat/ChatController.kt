@@ -111,9 +111,12 @@ class ChatController(
         adopt(peer.call("session.create").jsonObject, null)
     }
 
-    suspend fun send(text: String) {
+    suspend fun send(text: String) = submit(text)
+
+    /** Submits [text] to the model; the chat shows [shownAs] in a row of [displayKind] instead when it differs. */
+    internal suspend fun submit(text: String, shownAs: String = text, displayKind: String? = null) {
         val live = requireLiveSession()
-        feed(ChatInput.UserSent(text))
+        feed(ChatInput.UserSent(shownAs, displayKind))
         try {
             peer.call("prompt.submit", buildJsonObject {
                 put("session_id", live)
@@ -163,6 +166,9 @@ class ChatController(
     }
 
     internal fun liveSessionId(): String = requireLiveSession()
+
+    internal suspend fun call(method: String, params: JsonObject, timeoutMs: Long = 30_000): JsonObject =
+        peer.call(method, params, timeoutMs).jsonObject
 
     /** A `config.set` call; the result is Hermes' key/value answer. */
     internal suspend fun configSet(params: JsonObject, timeoutMs: Long = 30_000): JsonObject =

@@ -62,6 +62,9 @@ sealed interface ChatItem {
     data class Clarify(val requestId: String, val questions: List<ClarifyQuestion>, val status: CardStatus) : ChatItem
 
     data class Error(val message: String) : ChatItem
+
+    /** A line from Hermes about a command the user ran; local to the app, not part of the stored transcript. */
+    data class Notice(val text: String) : ChatItem
 }
 
 data class ChatState(
@@ -77,7 +80,10 @@ data class ChatState(
 sealed interface ChatInput {
     /** The messages of a `session.resume` / `session.create` result. */
     data class Transcript(val messages: List<JsonObject>, val running: Boolean) : ChatInput
-    data class UserSent(val text: String) : ChatInput
+    data class UserSent(val text: String, val displayKind: String? = null) : ChatInput
+
+    /** A local line appended to the chat, such as a command's notice or error. */
+    data class ItemAdded(val item: ChatItem) : ChatInput
     data class Event(val event: RpcFrame.Event) : ChatInput
     data class Request(
         val request: RpcFrame.ServerRequest,

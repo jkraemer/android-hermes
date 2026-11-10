@@ -242,6 +242,7 @@ private fun MessageList(
                 is ChatItem.Approval -> ApprovalCard(item, clock, onChoose = { viewModel.answerApproval(item.requestId, it) })
                 is ChatItem.Clarify -> ClarifyCard(item, onSend = { viewModel.answerClarify(item.requestId, it) })
                 is ChatItem.Error -> Text(item.message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+                is ChatItem.Notice -> Text(item.text, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
             }
         }
     }

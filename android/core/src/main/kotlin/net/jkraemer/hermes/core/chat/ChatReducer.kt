@@ -15,7 +15,8 @@ import java.time.Instant
 
 fun reduce(state: ChatState, input: ChatInput): ChatState = when (input) {
     is ChatInput.Transcript -> state.copy(items = transcriptItems(input.messages), running = input.running)
-    is ChatInput.UserSent -> state.copy(items = state.items + ChatItem.User(input.text), running = true)
+    is ChatInput.UserSent -> state.copy(items = state.items + ChatItem.User(input.text, input.displayKind), running = true)
+    is ChatInput.ItemAdded -> state.copy(items = state.items + input.item)
     is ChatInput.Event -> reduceEvent(state, input.event)
     is ChatInput.Request -> reduceRequest(state, input.request, input.receivedAt, input.approvalTimeoutSeconds)
     is ChatInput.Answered -> state.updateCard(input.requestId) { CardStatus.Answered(input.label) }
