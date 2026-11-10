@@ -331,7 +331,9 @@ class ChatController(
         // Only adds cards: a request Hermes cancelled while the app was away is settled by its
         // cancel event in the replay, which carries the reason.
         feedOpenRequests(activated)
-        optionsIn(activated)?.let { feed(ChatInput.OptionsRead(it)) }
+        // A session whose agent is not built answers with the profile's default route, not the picks Hermes still holds.
+        val lazy = (activated["info"] as? JsonObject)?.get("lazy") == JsonPrimitive(true)
+        if (!lazy || _state.value.options == null) optionsIn(activated)?.let { feed(ChatInput.OptionsRead(it)) }
         val cardsAtSend = cardStatuses()
         val missed = peer.call("session.events.since", sinceParams(live, _state.value.lastSeq)).jsonObject
         val restarted = missed.string("epoch") != epoch

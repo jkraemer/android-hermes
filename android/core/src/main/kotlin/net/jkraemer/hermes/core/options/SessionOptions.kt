@@ -72,19 +72,17 @@ suspend fun ChatController.runModelCommand(args: String, confirmed: Boolean = fa
 
 suspend fun ChatController.setReasoning(level: String) {
     require(level in REASONING_LEVELS) { "Not a reasoning level: $level" }
-    configSet(sessionParams("reasoning", level))
-    applyOptions(OptionsPatch(reasoning = level))
+    applyOptions(optionsPatchFor("reasoning", configSet(sessionParams("reasoning", level)).text("value").orEmpty()))
 }
 
 suspend fun ChatController.setFast(on: Boolean) {
-    configSet(sessionParams("fast", if (on) "fast" else "normal"))
-    applyOptions(OptionsPatch(fast = on))
+    val reported = configSet(sessionParams("fast", if (on) "fast" else "normal")).text("value").orEmpty()
+    applyOptions(OptionsPatch(fast = reported in FAST_WORDS))
 }
 
 /** Sets YOLO with an explicit value: Hermes toggles on any other word. */
 suspend fun ChatController.setYolo(on: Boolean) {
-    configSet(sessionParams("yolo", if (on) "1" else "0"))
-    applyOptions(OptionsPatch(yolo = on))
+    applyOptions(optionsPatchFor("yolo", configSet(sessionParams("yolo", if (on) "1" else "0")).text("value").orEmpty()))
 }
 
 /**
@@ -108,13 +106,16 @@ suspend fun ChatController.runOptionCommand(key: String, arg: String): OptionCha
     return OptionChange(reported, global)
 }
 
+/** The reported values of a service tier faster than normal. */
+private val FAST_WORDS = setOf("fast", "ultrafast")
+
 private val WHITESPACE = Regex("\\s+")
 
 /** What a reported option value means for the options; display words (`/reasoning show`) change none. */
 private fun optionsPatchFor(key: String, reported: String) = when (key) {
     "reasoning" -> OptionsPatch(reasoning = reported.takeIf { it in REASONING_LEVELS })
     "fast" -> OptionsPatch(fast = when (reported) {
-        "fast", "ultrafast" -> true
+        in FAST_WORDS -> true
         "normal" -> false
         else -> null
     })

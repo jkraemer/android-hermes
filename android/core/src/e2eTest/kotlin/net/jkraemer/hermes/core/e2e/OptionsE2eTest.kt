@@ -82,9 +82,8 @@ class OptionsE2eTest {
             assertTrue("not applied: $switch", switch is ModelSwitch.Applied)
             assertEquals(models.other, chat.state.value.options?.model)
 
-            val another = app.newChat().also { it.startNew() }
-            val anotherInfo = app.rpc.call("model.options", buildJsonObject { put("session_id", another.state.value.liveSessionId) }).jsonObject
-            assertEquals(models.default.model, anotherInfo.text("model"))
+            val created = app.rpc.call("session.create").jsonObject
+            assertEquals(models.default.model, created["info"]?.jsonObject?.text("model"))
 
             assertEquals(models.other, reopened(chat.stored()).state.value.options?.model)
         }

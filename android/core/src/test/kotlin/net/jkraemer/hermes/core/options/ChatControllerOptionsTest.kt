@@ -106,9 +106,12 @@ class ChatControllerOptionsTest {
 
     @Test
     fun reasoningFastYoloParams() = test { peer, chat ->
-        peer.on("config.set", """{"value":"high"}""")
+        // Each answer differs from what was asked wherever it can, so the options must come from the answer.
+        peer.on("config.set", """{"key":"reasoning","value":"medium"}""")
         chat.setReasoning("high")
+        peer.on("config.set", """{"key":"fast","value":"ultrafast"}""")
         chat.setFast(true)
+        peer.on("config.set", """{"key":"yolo","value":"1","scope":"session"}""")
         chat.setYolo(true)
 
         assertEquals(
@@ -119,9 +122,11 @@ class ChatControllerOptionsTest {
             ),
             peer.configCalls(),
         )
-        assertEquals(BASE.copy(reasoning = "high", fast = true, yolo = true), options(chat))
+        assertEquals(BASE.copy(reasoning = "medium", fast = true, yolo = true), options(chat))
 
+        peer.on("config.set", """{"key":"fast","value":"normal"}""")
         chat.setFast(false)
+        peer.on("config.set", """{"key":"yolo","value":"0","scope":"session"}""")
         chat.setYolo(false)
         assertEquals(
             listOf(
@@ -130,7 +135,7 @@ class ChatControllerOptionsTest {
             ),
             peer.configCalls().takeLast(2),
         )
-        assertEquals(BASE.copy(reasoning = "high"), options(chat))
+        assertEquals(BASE.copy(reasoning = "medium"), options(chat))
     }
 
     @Test
@@ -240,5 +245,40 @@ class ChatControllerOptionsTest {
         peer.state.value = ConnectionState.Ready
 
         assertEquals("c", options(chat)?.model)
+    }
+
+    private fun dropAndReturn(peer: FakePeer) {
+        peer.state.value = ConnectionState.Connecting
+        peer.state.value = ConnectionState.Ready
+    }
+
+    @Test
+    fun lazyActivateInfoKeepsOptions() = test(configSet = """{"key":"yolo","value":"1","scope":"session"}""") { peer, chat ->
+        chat.setYolo(true)
+        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":false,"info":{"lazy":true,"model":"a","provider":"p"}}""")
+
+        dropAndReturn(peer)
+
+        assertEquals(BASE.copy(yolo = true), options(chat))
+    }
+
+    @Test
+    fun lazyActivateInfoIsTakenWhenTheChatHasNoOptions() = test(info = """{"lazy":true}""") { peer, chat ->
+        peer.on("session.activate", """{"session_id":"live1","messages":[],"running":false,"info":{"lazy":true,"model":"a","provider":"p"}}""")
+
+        dropAndReturn(peer)
+
+        assertEquals(BASE, options(chat))
+    }
+
+    @Test
+    fun reopenTakesWhateverTheInfoSays() = test(configSet = """{"key":"yolo","value":"1","scope":"session"}""") { peer, chat ->
+        chat.setYolo(true)
+        peer.on("session.activate") { throw RpcException(RpcError(4001, "unknown session")) }
+        peer.on("session.resume", resume("""{"lazy":true,"model":"a","provider":"p"}"""))
+
+        dropAndReturn(peer)
+
+        assertEquals(BASE, options(chat))
     }
 }
