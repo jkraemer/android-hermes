@@ -46,6 +46,7 @@ import net.jkraemer.hermes.core.options.setReasoning
 import net.jkraemer.hermes.core.options.setYolo
 import net.jkraemer.hermes.core.options.switchModel
 import net.jkraemer.hermes.core.rpc.ConnectionState
+import net.jkraemer.hermes.core.rpc.userMessage
 import net.jkraemer.hermes.settings.NeedsAnswerStore
 import net.jkraemer.hermes.settings.SeenStore
 import java.time.Instant
@@ -402,7 +403,7 @@ class ChatViewModel(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            _message.value = e.message?.let { "$failure: $it" } ?: failure
+            _message.value = e.userMessage()?.let { "$failure: $it" } ?: failure
         }
     }
 

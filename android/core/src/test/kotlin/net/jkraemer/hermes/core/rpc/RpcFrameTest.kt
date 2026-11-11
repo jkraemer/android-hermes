@@ -24,6 +24,20 @@ class RpcFrameTest {
     }
 
     @Test
+    fun anErrorKeepsItsReason() {
+        val frame = parseFrame(
+            """{"jsonrpc":"2.0","id":9,"error":{"code":4090,"message":"This chat is open elsewhere.","data":{"reason":"SESSION_NOT_OWNED"}}}""",
+        )
+        assertEquals(RpcFrame.Response(9, null, RpcError(4090, "This chat is open elsewhere.", reason = "SESSION_NOT_OWNED")), frame)
+    }
+
+    @Test
+    fun anErrorWithoutDataHasNoReason() {
+        val frame = parseFrame("""{"jsonrpc":"2.0","id":10,"error":{"code":5000,"message":"boom","data":"not an object"}}""")
+        assertEquals(RpcFrame.Response(10, null, RpcError(5000, "boom")), frame)
+    }
+
+    @Test
     fun parsesEventWithSeq() {
         val frame = parseFrame(
             """{"jsonrpc":"2.0","method":"event","params":{"type":"message.delta","session_id":"s1","seq":12,"payload":{"text":"hi"}}}""",

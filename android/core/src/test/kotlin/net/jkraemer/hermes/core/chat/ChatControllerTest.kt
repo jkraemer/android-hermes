@@ -26,6 +26,7 @@ import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.core.rpc.RpcError
 import net.jkraemer.hermes.core.rpc.RpcException
 import net.jkraemer.hermes.core.rpc.RpcFrame
+import net.jkraemer.hermes.core.rpc.userMessage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -526,6 +527,30 @@ class ChatControllerTest {
         assertEquals(ChatItem.Error("Connection closed"), chat.state.value.items.last())
     }
 
+    @Test fun aSendRefusedBecauseAnotherHermesOwnsTheChatSaysSoPlainly() = test { peer, chat ->
+        peer.on("session.create", resumeResult())
+        peer.on("prompt.submit") {
+            throw RpcException(RpcError(4090, "$OWNED_ELSEWHERE\nDetails: session s1 opened by cli 0m ago.", reason = "SESSION_NOT_OWNED"))
+        }
+        chat.startNew()
+
+        try {
+            chat.send("hello")
+            fail("expected the send to be refused")
+        } catch (_: RpcException) {
+        }
+
+        assertEquals(ChatItem.Error(OWNED_ELSEWHERE), chat.state.value.items.last())
+    }
+
+    @Test fun anOwnershipRefusalReadsAsHermesFirstLineAndOtherErrorsAsTheyAre() {
+        val owned = RpcException(RpcError(4090, "$OWNED_ELSEWHERE\nDetails: x", reason = "SESSION_NOT_OWNED"))
+        assertEquals(OWNED_ELSEWHERE, owned.userMessage())
+        assertEquals("line one\nline two", RpcException(RpcError(5000, "line one\nline two")).userMessage())
+        assertEquals("Connection closed", IOException("Connection closed").userMessage())
+        assertEquals(null, IllegalStateException().userMessage())
+    }
+
     @Test fun eventsAcrossRepeatedResyncsOnRealThreadsAreAppliedOnceInOrder() = runBlocking {
         // Producer, collector and resync coroutines run on separate threads. A smoke test, not a
         // proof: the window for a lost event is a few instructions wide, so a mutant that flushes
@@ -728,3 +753,5 @@ class ChatControllerTest {
         assertEquals(CardStatus.Open, (chat.state.value.items.single() as ChatItem.Approval).status)
     }
 }
+
+private const val OWNED_ELSEWHERE = "This chat is open in another Hermes window/terminal. Use it there, or start a new chat here."

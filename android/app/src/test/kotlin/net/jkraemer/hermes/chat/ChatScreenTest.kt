@@ -39,6 +39,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import net.jkraemer.hermes.core.chat.RpcPeer
 import net.jkraemer.hermes.core.rpc.ConnectionState
+import net.jkraemer.hermes.core.rpc.RpcError
 import net.jkraemer.hermes.core.rpc.RpcFrame
 import net.jkraemer.hermes.settings.SeenStore
 import org.junit.Assert.assertEquals
@@ -584,6 +585,20 @@ class ChatScreenTest {
         compose.onNodeWithContentDescription("Send").performClick()
 
         waitForText("Couldn't send: socket closed")
+    }
+
+    @Test
+    fun aSendRefusedBecauseATerminalOwnsTheChatSaysSoPlainly() {
+        val sentence = "This chat is open in another Hermes window/terminal. Use it there, or start a new chat here."
+        peer.refusing = setOf("prompt.submit")
+        peer.refusal = RpcError(4090, "$sentence\nDetails: session stored1 opened by cli 0m ago.", reason = "SESSION_NOT_OWNED")
+        show()
+        compose.waitUntil(10_000) { peer.calls.any { it.first == "session.events.since" } }
+        compose.onNodeWithTag("composer").performTextInput("hello")
+        compose.onNodeWithContentDescription("Send").performClick()
+
+        waitForText("Couldn't send: $sentence")
+        compose.onAllNodes(hasText("Details:", substring = true)).assertCountEquals(0)
     }
 
     @Test

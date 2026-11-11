@@ -8,9 +8,20 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
 
-data class RpcError(val code: Int, val message: String)
+/** [reason] is the machine-readable cause Hermes sends in the error's `data`, such as `SESSION_NOT_OWNED`. */
+data class RpcError(val code: Int, val message: String, val reason: String? = null)
 
 class RpcException(val error: RpcError) : Exception(error.message)
+
+/** Hermes' reason for a request refused because another Hermes process (a terminal, Desktop) owns the chat. */
+const val SESSION_NOT_OWNED = "SESSION_NOT_OWNED"
+
+/**
+ * What to tell the user about this failure. For an ownership refusal that is the first line of Hermes' message,
+ * its plain sentence; the second line holds details for logs (process, surface). Anything else keeps its message.
+ */
+fun Throwable.userMessage(): String? =
+    if (this is RpcException && error.reason == SESSION_NOT_OWNED) error.message.lineSequence().first() else message
 
 sealed interface RpcFrame {
     data class Response(val id: Long, val result: JsonElement?, val error: RpcError?) : RpcFrame
@@ -55,6 +66,7 @@ fun parseFrame(line: String): RpcFrame? {
                 RpcError(
                     (it["code"] as? JsonPrimitive)?.intOrNull ?: return null,
                     it["message"].asString().orEmpty(),
+                    (it["data"] as? JsonObject)?.get("reason").asString(),
                 )
             }
             RpcFrame.Response(responseId, root["result"], error)

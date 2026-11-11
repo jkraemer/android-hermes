@@ -21,6 +21,9 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 - Sending a message scrolls the chat to its end, so your message is in view
   even when you had scrolled up.
+- When Hermes refuses a message because the chat is open in a terminal or
+  another Hermes window, the app says so in Hermes' own words instead of
+  showing its internal details.
 
 ## [0.3.0] - 2026-11-11
 

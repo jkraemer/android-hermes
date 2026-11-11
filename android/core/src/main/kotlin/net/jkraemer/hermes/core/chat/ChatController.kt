@@ -29,6 +29,7 @@ import net.jkraemer.hermes.core.options.sessionOptionsFrom
 import net.jkraemer.hermes.core.rpc.RpcException
 import net.jkraemer.hermes.core.rpc.ConnectionState
 import net.jkraemer.hermes.core.rpc.RpcFrame
+import net.jkraemer.hermes.core.rpc.userMessage
 import java.time.Instant
 
 /** The part of the RPC connection the chat needs; lets tests drive the controller without a socket. */
@@ -124,7 +125,7 @@ class ChatController(
             })
         } catch (e: Exception) {
             if (e is CancellationException) throw e
-            feed(ChatInput.Event(RpcFrame.Event("error", live, null, buildJsonObject { put("message", e.message ?: "Sending failed") })))
+            feed(ChatInput.Event(RpcFrame.Event("error", live, null, buildJsonObject { put("message", e.userMessage() ?: "Sending failed") })))
             throw e
         }
     }

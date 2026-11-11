@@ -27,6 +27,8 @@ internal class FakePeer : RpcPeer {
     var failing = emptySet<String>()
     /** Methods Hermes answers with an error response. */
     var refusing = emptySet<String>()
+    /** What Hermes answers the [refusing] methods with. */
+    var refusal = RpcError(4007, "session not found")
     /** Answers by method, instead of the empty object. */
     val results = mutableMapOf<String, String>()
     /** When set, loading the command catalogue waits for it. */
@@ -38,7 +40,7 @@ internal class FakePeer : RpcPeer {
         if (method == "session.resume" || method == "session.create") openGate?.await()
         if (method == "commands.catalog") catalogGate?.await()
         if (method in failing) throw java.io.IOException("socket closed")
-        if (method in refusing) throw RpcException(RpcError(4007, "session not found"))
+        if (method in refusing) throw RpcException(refusal)
         return Json.parseToJsonElement(
             results[method] ?: when (method) {
                 "commands.catalog" -> COMMANDS_CATALOG
