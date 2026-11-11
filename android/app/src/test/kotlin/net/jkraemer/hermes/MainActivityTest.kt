@@ -181,6 +181,15 @@ class MainActivityTest {
         compose.onNode(hasText(title) and hasClickAction()).performClick()
     }
 
+    /** Opens a cron job from the drawer, whose Scheduled section starts collapsed. */
+    private fun openDrawerJob(name: String) {
+        openDrawer()
+        await(hasContentDescription("Show scheduled jobs"))
+        compose.onNode(hasContentDescription("Show scheduled jobs"), useUnmergedTree = true).performClick()
+        await(hasText(name) and hasClickAction())
+        compose.onNode(hasText(name) and hasClickAction()).performClick()
+    }
+
     private fun pressBack(scenario: ActivityScenario<MainActivity>) =
         scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
 
@@ -616,7 +625,7 @@ class MainActivityTest {
         storeSessionCookie()
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             awaitTag("chat-screen")
-            openDrawerEntry("Nightly")
+            openDrawerJob("Nightly")
             awaitTag("job-feed-screen")
             await(inFeed("Backups done."))
 
@@ -636,7 +645,7 @@ class MainActivityTest {
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             awaitTag("chat-screen")
             await(inChat("Sourdough"))
-            openDrawerEntry("Nightly")
+            openDrawerJob("Nightly")
             awaitTag("job-feed-screen")
 
             var finishing = false
@@ -677,7 +686,7 @@ class MainActivityTest {
         storeSessionCookie()
         ActivityScenario.launch(MainActivity::class.java).use {
             awaitTag("chat-screen")
-            openDrawerEntry("Nightly")
+            openDrawerJob("Nightly")
             await(inFeed("Backups done."))
 
             compose.onNode(hasTestTag("composer") and hasAnyAncestor(hasTestTag("job-feed-screen"))).performTextInput("Which backups?")

@@ -5,20 +5,28 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import net.jkraemer.hermes.core.cron.CronJobSummary
@@ -40,6 +48,8 @@ fun SessionsDrawerContent(
     onViewAll: () -> Unit,
     onOpenSettings: () -> Unit,
 ) {
+    // The jobs are tucked away until asked for, so the chats stay at the top of the drawer.
+    var scheduledOpen by rememberSaveable { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize()) {
         item {
             Row(
@@ -52,8 +62,10 @@ fun SessionsDrawerContent(
             }
         }
         if (entries.scheduled.isNotEmpty()) {
-            item(key = "scheduled-heading") { DrawerHeading("Scheduled") }
-            items(entries.scheduled, key = { "job-" + it.job.id }) { DrawerJob(it, onOpenJob) }
+            item(key = "scheduled-heading") {
+                ScheduledHeading(open = scheduledOpen, unread = entries.scheduled.any { it.unread }) { scheduledOpen = !scheduledOpen }
+            }
+            if (scheduledOpen) items(entries.scheduled, key = { "job-" + it.job.id }) { DrawerJob(it, onOpenJob) }
         }
         if (entries.pinned.isNotEmpty()) {
             item(key = "pinned-heading") { DrawerHeading("Pinned") }
@@ -89,6 +101,32 @@ private fun DrawerHeading(text: String) {
         style = MaterialTheme.typography.labelLarge,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * The heading of the cron jobs, which shows or hides them when tapped. Collapsed, it carries the unread dot of
+ * any job with a report not yet seen.
+ */
+@Composable
+private fun ScheduledHeading(open: Boolean, unread: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("scheduled-heading").clickable(onClick = onToggle)
+            .padding(horizontal = 24.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            "Scheduled",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Icon(
+            if (open) Icons.Filled.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = if (open) "Hide scheduled jobs" else "Show scheduled jobs",
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.weight(1f))
+        if (unread && !open) UnreadDot()
+    }
 }
 
 @Composable

@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
@@ -138,6 +139,7 @@ class SessionsDrawerTest {
         jobs("Nightly" to 2L)
         show(listOf(session("a", title = "Chat title", preview = "a preview", lastActive = NOW.minusSeconds(60))))
         waitForText("Chat title")
+        expandScheduled()
         waitForText("Nightly")
 
         compose.onAllNodes(hasText("a preview")).assertCountEquals(0)
@@ -147,10 +149,58 @@ class SessionsDrawerTest {
         compose.onAllNodes(hasTestTag("unread-dot"), useUnmergedTree = true).assertCountEquals(2)
     }
 
+    /** The Scheduled section starts collapsed; tapping its heading shows the jobs. */
+    private fun expandScheduled() {
+        compose.onNodeWithText("Scheduled").performClick()
+        compose.waitForIdle()
+    }
+
+    @Test
+    fun scheduledIsCollapsedByDefault() {
+        jobs("Nightly" to 2L)
+        show(listOf(session("a", title = "Chat title")))
+        waitForText("Scheduled")
+        waitForText("Chat title")
+        compose.onAllNodes(hasText("Nightly")).assertCountEquals(0)
+        compose.onAllNodes(hasContentDescription("Show scheduled jobs")).assertCountEquals(1)
+    }
+
+    @Test
+    fun tappingScheduledShowsAndHidesTheJobs() {
+        jobs("Nightly" to 2L)
+        show(listOf(session("a", title = "Chat title")))
+        waitForText("Scheduled")
+        expandScheduled()
+        waitForText("Nightly")
+        compose.onAllNodes(hasContentDescription("Hide scheduled jobs")).assertCountEquals(1)
+        compose.onNodeWithText("Scheduled").performClick()
+        compose.waitForIdle()
+        compose.onAllNodes(hasText("Nightly")).assertCountEquals(0)
+    }
+
+    @Test
+    fun collapsedScheduledShowsAnUnreadDotWhenAJobHasAnUnreadReport() {
+        jobs("Nightly" to 2L)
+        show(listOf(session("a", title = "Chat title", lastActive = NOW.minusSeconds(86_400 * 2))))
+        waitForText("Scheduled")
+        waitForText("Chat title")
+        // The chat predates the seen baseline, so the only unread thing is the job's report, shown on the heading.
+        val onHeading = hasTestTag("unread-dot") and hasAnyAncestor(hasTestTag("scheduled-heading"))
+        compose.onAllNodes(onHeading, useUnmergedTree = true).assertCountEquals(1)
+        compose.onAllNodes(hasTestTag("unread-dot"), useUnmergedTree = true).assertCountEquals(1)
+        expandScheduled()
+        waitForText("Nightly")
+        // Expanded, the dot moves from the heading to the job.
+        compose.onAllNodes(onHeading, useUnmergedTree = true).assertCountEquals(0)
+        compose.onAllNodes(hasTestTag("unread-dot"), useUnmergedTree = true).assertCountEquals(1)
+    }
+
     @Test
     fun scheduledJobsComeFirstNewestReportFirstAndSilentOnesLast() {
         jobs("Quiet" to null, "Nightly" to 120L, "Morning" to 5L)
         show(listOf(session("a", title = "Chat title")))
+        waitForText("Scheduled")
+        expandScheduled()
         waitForText("Quiet")
 
         val top = { text: String -> compose.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top }
@@ -187,6 +237,8 @@ class SessionsDrawerTest {
     fun tappingAJobOpensTheJob() {
         jobs("Nightly" to 2L)
         show(listOf(session("a", title = "Chat title")))
+        waitForText("Scheduled")
+        expandScheduled()
         waitForText("Nightly")
         compose.onNodeWithText("Nightly").performClick()
         assertEquals(listOf("Nightly" to "Nightly"), openedJobs)
