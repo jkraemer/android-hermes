@@ -4,6 +4,8 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-11
+
 ### Changed
 
 - The drawer's "Scheduled" section starts collapsed; tap it to see the jobs.
