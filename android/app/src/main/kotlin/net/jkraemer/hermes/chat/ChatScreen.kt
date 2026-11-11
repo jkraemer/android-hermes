@@ -50,6 +50,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -153,16 +154,22 @@ fun ChatScreen(
         // The composer floats over the end of the chat, which scrolls underneath it.
         val density = LocalDensity.current
         var composerHeight by remember { mutableStateOf(0.dp) }
+        // Counts the messages sent from this screen; each one brings the end of the chat back into view. Not saved:
+        // a rotation must keep a chat scrolled away from its end where it was.
+        var sent by remember { mutableIntStateOf(0) }
         Box(Modifier.padding(padding).fillMaxSize()) {
             Column(Modifier.fillMaxSize()) {
                 if (!ready) ReconnectingBanner(onRetryConnect)
                 else if (openFailed && chat.liveSessionId == null) OpenFailedBanner(viewModel::retryOpen)
-                Messages(chat.items, cron, viewModel, clock, composerHeight, Modifier.weight(1f))
+                Messages(chat.items, cron, viewModel, clock, composerHeight, sent, Modifier.weight(1f))
             }
             Composer(
                 running = chat.running,
                 canSend = ready && chat.liveSessionId != null,
-                onSend = viewModel::send,
+                onSend = {
+                    viewModel.send(it)
+                    sent++
+                },
                 onStop = viewModel::interrupt,
                 keyboardVisible = keyboardVisible,
                 prefill = (effect as? ChatEffect.Prefill)?.text,
@@ -198,15 +205,21 @@ private fun OpenFailedBanner(onRetry: () -> Unit) {
     }
 }
 
-/** [composerHeight] is how much of the list's bottom the composer covers; the last message ends above it. */
+/**
+ * [composerHeight] is how much of the list's bottom the composer covers; the last message ends above it. Each change
+ * of [sent], a message just sent, follows the end again so the message is in view.
+ */
 @Composable
-private fun Messages(chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatViewModel, clock: () -> Instant, composerHeight: Dp, modifier: Modifier) {
+private fun Messages(
+    chatItems: List<ChatItem>, cron: Boolean, viewModel: ChatViewModel, clock: () -> Instant, composerHeight: Dp, sent: Int, modifier: Modifier,
+) {
     val listState = rememberLazyListState()
     val parsedReplies by viewModel.parsedReplies.collectAsStateWithLifecycle()
     // Saved with the list's position, so a rotation keeps a chat scrolled away from its end where it was.
     val following = rememberSaveable { mutableStateOf(true) }
     val glide = remember { mutableStateOf(false) }
     FollowTheEnd(listState, following, glide)
+    LaunchedEffect(sent) { if (sent > 0) following.value = true }
     val awayFromTheEnd by remember { derivedStateOf { !following.value && listState.canScrollForward } }
     val work = if (cron) cronRunWork(chatItems) else null
     var workShown by rememberSaveable { mutableStateOf(false) }

@@ -871,6 +871,21 @@ class ChatScreenTest {
     }
 
     @Test
+    fun sendingAMessageScrollsToTheEndAtOnce() {
+        showLongChat(6)
+        compose.onNodeWithTag("messages").performTouchInput { swipeDown() }
+        compose.waitForIdle()
+        compose.onNodeWithContentDescription("Scroll to end").assertIsDisplayed()
+
+        compose.onNodeWithTag("composer").performTextInput("A fresh question")
+        compose.onNodeWithContentDescription("Send").performClick()
+        compose.waitForIdle()
+
+        compose.onNode(hasText("A fresh question")).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Scroll to end").assertDoesNotExist()
+    }
+
+    @Test
     fun scrollToEndScrollsVisiblyRatherThanJumping() {
         showLongChat(6)
         compose.onNodeWithTag("messages").performTouchInput { swipeDown(durationMillis = 100) }

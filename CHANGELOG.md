@@ -17,6 +17,11 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 - An ✕ in the message field clears what you typed.
 
+### Fixed
+
+- Sending a message scrolls the chat to its end, so your message is in view
+  even when you had scrolled up.
+
 ## [0.3.0] - 2026-11-11
 
 ### Added
