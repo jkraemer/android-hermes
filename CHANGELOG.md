@@ -4,6 +4,13 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
 
 ## [Unreleased]
 
+### Changed
+
+- The drawer's "Scheduled" section starts collapsed; tap it to see the jobs.
+  While it is closed, a dot shows that a job has a report you haven't read.
+- Like the full list, the drawer leaves out cron jobs that have nothing to
+  show, such as jobs that haven't reported anything for a while.
+
 ## [0.3.0] - 2026-11-11
 
 ### Added

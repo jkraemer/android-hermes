@@ -228,7 +228,8 @@ class SessionListViewModelTest {
 
         model.refreshQuietly()
 
-        settleUntil { model.state.value.drawer.scheduled.isNotEmpty() }
+        // A job with nothing to show is not in the drawer, so the load is awaited through its runs request.
+        settleUntil { source.runsRequests.isNotEmpty() }
         settle()
         assertEquals(listOf("j1" to 10), source.runsRequests)
     }

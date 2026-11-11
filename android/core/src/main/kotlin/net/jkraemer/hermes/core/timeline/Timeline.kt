@@ -68,7 +68,7 @@ private fun rowOf(session: SessionSummary, lastOpened: Map<String, Instant>, see
         needsAnswer = session.id in needsAnswer,
     )
 
-/** What the navigation drawer lists: the cron jobs, every pinned session, and the newest other chats. */
+/** What the navigation drawer lists: the cron jobs with something to show, every pinned session, and the newest other chats. */
 data class DrawerEntries(
     val pinned: List<TimelineItem.Row>,
     val recents: List<TimelineItem.Row>,
@@ -79,8 +79,8 @@ private const val DRAWER_RECENTS = 10
 
 /**
  * The sessions are newest first, without cron runs, whose [jobs] are listed instead; the recents are cut off
- * after [DRAWER_RECENTS]. The jobs are newest first by their time; those that never reported anything come
- * last, by name.
+ * after [DRAWER_RECENTS]. The jobs are newest first by their time; like the full list, the drawer leaves out
+ * those with no report to show (never reported, or all their runs silent or archived).
  */
 fun buildDrawerEntries(
     sessions: List<SessionSummary>,
@@ -91,6 +91,6 @@ fun buildDrawerEntries(
 ): DrawerEntries {
     val (pinned, unpinned) = sessions.filter { it.isListed }.sortedByDescending { it.lastActive }.partition { it.pinned }
     fun row(session: SessionSummary) = rowOf(session, lastOpened, seenBaseline, needsAnswer)
-    val scheduled = jobs.sortedWith(compareByDescending<CronJobSummary, Instant?>(nullsFirst()) { it.time }.thenBy { it.job.name })
+    val scheduled = jobs.filter { it.time != null }.sortedByDescending { it.time }
     return DrawerEntries(pinned.map(::row), unpinned.take(DRAWER_RECENTS).map(::row), scheduled)
 }

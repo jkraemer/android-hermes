@@ -196,19 +196,27 @@ class SessionsDrawerTest {
     }
 
     @Test
-    fun scheduledJobsComeFirstNewestReportFirstAndSilentOnesLast() {
+    fun scheduledJobsComeFirstNewestReportFirstWithoutThoseThatHaveNothingToShow() {
         jobs("Quiet" to null, "Nightly" to 120L, "Morning" to 5L)
         show(listOf(session("a", title = "Chat title")))
         waitForText("Scheduled")
         expandScheduled()
-        waitForText("Quiet")
+        waitForText("Nightly")
 
         val top = { text: String -> compose.onNodeWithText(text).fetchSemanticsNode().boundsInRoot.top }
         assertTrue(top("Hermes") < top("Scheduled"))
         assertTrue(top("Scheduled") < top("Morning"))
         assertTrue(top("Morning") < top("Nightly"))
-        assertTrue(top("Nightly") < top("Quiet"))
-        assertTrue(top("Quiet") < top("Recents"))
+        assertTrue(top("Nightly") < top("Recents"))
+        compose.onAllNodes(hasText("Quiet")).assertCountEquals(0)
+    }
+
+    @Test
+    fun jobsThatHaveNothingToShowMakeNoScheduledSection() {
+        jobs("Quiet" to null)
+        show(listOf(session("a", title = "Chat title")))
+        waitForText("Chat title")
+        compose.onAllNodes(hasText("Scheduled")).assertCountEquals(0)
     }
 
     @Test

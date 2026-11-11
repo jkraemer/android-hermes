@@ -217,9 +217,10 @@ class TimelineTest {
     }
 
     @Test
-    fun drawerListsTheJobsNewestFirstAndThoseThatNeverReportedLast() {
+    fun drawerListsTheJobsNewestFirstAndLeavesOutThoseWithNothingToShow() {
         val jobs = listOf(job("quiet", null), job("nightly", at(4, 23)), job("idle", null), job("morning", at(5, 11)))
 
-        assertEquals(listOf("morning", "nightly", "idle", "quiet"), drawer(emptyList(), jobs = jobs).scheduled.map { it.job.id })
+        // Like the full list, which places a job on the day it last reported something and leaves out the rest.
+        assertEquals(listOf("morning", "nightly"), drawer(emptyList(), jobs = jobs).scheduled.map { it.job.id })
     }
 }
