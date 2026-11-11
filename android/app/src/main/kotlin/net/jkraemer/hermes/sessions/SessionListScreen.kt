@@ -33,6 +33,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -197,6 +199,13 @@ fun SessionListScreen(
     }
 }
 
+/** The search field's colors: the message box's opaque background, so the list does not show through it. */
+@Composable
+internal fun searchFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
+    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+)
+
 /** The search field above the keyboard, with the round button that closes search beside it. */
 @Composable
 private fun SearchBar(query: String, onQueryChange: (String) -> Unit, onClose: () -> Unit, modifier: Modifier) {
@@ -218,6 +227,7 @@ private fun SearchBar(query: String, onQueryChange: (String) -> Unit, onClose: (
             },
             singleLine = true,
             shape = CircleShape,
+            colors = searchFieldColors(),
         )
         FilledTonalIconButton(
             {

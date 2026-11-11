@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -128,6 +130,9 @@ internal fun Composer(
                         onTextChange = { text = it },
                         Modifier.weight(1f).padding(vertical = if (expanded) 8.dp else 0.dp).onFocusChanged { focused = it.isFocused },
                     )
+                    if (text.text.isNotEmpty()) {
+                        IconButton({ text = TextFieldValue() }) { Icon(Icons.Filled.Close, contentDescription = "Clear message") }
+                    }
                     if (!expanded) sendOrStop()
                 }
                 if (expanded) {

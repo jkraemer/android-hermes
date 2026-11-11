@@ -10,6 +10,12 @@ User-visible changes, in the spirit of [Keep a Changelog](https://keepachangelog
   While it is closed, a dot shows that a job has a report you haven't read.
 - Like the full list, the drawer leaves out cron jobs that have nothing to
   show, such as jobs that haven't reported anything for a while.
+- The search field has a solid background like the message field, so the
+  list no longer shows through it.
+
+### Added
+
+- An ✕ in the message field clears what you typed.
 
 ## [0.3.0] - 2026-11-11
 

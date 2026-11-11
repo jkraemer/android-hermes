@@ -2,6 +2,8 @@ package net.jkraemer.hermes.sessions
 
 import android.content.Context
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
@@ -524,6 +526,22 @@ class SessionListScreenTest {
         assertEquals(0, hasCount("Search"))
         assertEquals(0, hasCount("New chat"))
         assertEquals(1, hasCount("Close search"))
+    }
+
+    @Test
+    fun theSearchFieldIsOpaqueLikeTheMessageBox() {
+        var colors: TextFieldColors? = null
+        var messageBox = Color.Unspecified
+        compose.setContent {
+            MaterialTheme {
+                colors = searchFieldColors()
+                messageBox = MaterialTheme.colorScheme.surfaceContainerHigh
+            }
+        }
+        compose.waitForIdle()
+
+        assertEquals(messageBox, colors!!.focusedContainerColor)
+        assertEquals(messageBox, colors!!.unfocusedContainerColor)
     }
 
     @Test
